@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function admin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/profiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.get('role', 'user') == 'admin';
+    }
+    function validPreferences(p) {
+      return p is map && p.keys().hasAll(['compactMetrics','topics','formats'])
+        && p.keys().hasOnly(['compactMetrics','topics','formats']) && p.compactMetrics is bool
+        && p.topics is list && p.topics.size() <= 9
+        && p.topics.toSet().size() == p.topics.size()
+        && p.topics.hasOnly(['energy_communities','regulation','generation','demand','energy_market','renewable_energy','energy_projects','sustainability','energy_news'])
+        && p.formats is list && p.formats.size() <= 6
+        && p.formats.toSet().size() == p.formats.size()
+        && p.formats.hasOnly(['news','statistics','regulation','communities','projects','education']);
+    }
+    function validProfile(uid) {
+      let p = request.resource.data;
+      return p.keys().hasAll(['userId','name','interests','preferences','role','onboardingCompleted','createdAt','updatedAt'])
+        && p.keys().hasOnly(['userId','name','interests','preferences','role','onboardingCompleted','createdAt','updatedAt'])
+        && p.userId == uid && p.name is string && p.name.size() >= 2 && p.name.size() <= 80
+        && p.interests is list && p.interests.size() <= 5
+        && p.interests.hasOnly(['Energía solar','Comunidades energéticas','Normativa','Datos del sector','Consumo responsable'])
+        && validPreferences(p.preferences) && p.role in ['user','admin']
+        && p.onboardingCompleted is bool && (!p.onboardingCompleted || p.preferences.topics.size() > 0)
+        && p.createdAt is timestamp && p.updatedAt == request.time;
+    }
+    match /profiles/{uid} {
+      allow read: if owner(uid) || admin();
+      // Solo un entorno administrativo de confianza puede asignar el rol admin.
+      allow create: if owner(uid) && validProfile(uid)
+        && request.resource.data.role == 'user' && request.resource.data.onboardingCompleted == false
+        && request.resource.data.createdAt == request.time;
+      allow update: if owner(uid) && validProfile(uid)
+        && request.resource.data.role == resource.data.get('role', 'user')
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (request.resource.data.onboardingCompleted || !resource.data.get('onboardingCompleted', false));
+      allow delete: if false;
+    }
+    match /profiles/{uid}/interactions/{eventId} {
+      allow read: if admin();
+      allow create: if owner(uid)
+        && request.resource.data.keys().hasAll(['userId','eventType','timestamp','contentId','source','metadata'])
+        && request.resource.data.keys().hasOnly(['userId','eventType','timestamp','contentId','source','metadata'])
+        && owner(request.resource.data.userId)
+        && request.resource.data.timestamp == request.time
+        && request.resource.data.eventType in ['REGISTER','LOGIN','LOGOUT','VIEW_ARTICLE','VIEW_REGULATION','VIEW_METRIC','CLICK_EXTERNAL_SOURCE','VIEW_ENERGY_COMMUNITY','VIEW_DASHBOARD','UPDATE_PROFILE','COMPLETE_ONBOARDING','SELECT_PREFERENCES','VIEW_ENERGY_MAP','CLICK_ENERGY_COMMUNITY_MARKER','SEARCH','SEARCH_RESULT_CLICK','RECOMMENDATION_CLICK','CHAT_OPEN','CHAT_QUERY','CHAT_RESPONSE','CHAT_SOURCE_CLICK']
+        && request.resource.data.contentId is string && request.resource.data.contentId.size() <= 120
+        && request.resource.data.source in ['MinEnergía','CREG','XM','Visual Community']
+        && request.resource.data.metadata is map
+        && request.resource.data.metadata.keys().hasOnly(['path','section','category','queryLength'])
+        && (!('category' in request.resource.data.metadata) || request.resource.data.metadata.category in ['energy_communities','regulation','generation','demand','energy_market','renewable_energy','energy_projects','sustainability','energy_news'])
+        && (!('queryLength' in request.resource.data.metadata) || (request.resource.data.metadata.queryLength is int && request.resource.data.metadata.queryLength >= 0 && request.resource.data.metadata.queryLength <= 1200))
+        && (!('path' in request.resource.data.metadata) || (request.resource.data.metadata.path is string && request.resource.data.metadata.path.size() <= 100))
+        && (!('section' in request.resource.data.metadata) || (request.resource.data.metadata.section is string && request.resource.data.metadata.section.size() <= 60));
+      allow update, delete: if false;
+    }
+    // Las consultas de grupo también requieren un administrador.
+    match /{path=**}/interactions/{eventId} { allow read: if admin(); }
+    // Métricas internas y futuros resultados del motor: únicamente un backend autorizado escribe.
+    match /profiles/{uid}/interestProfile/{id} { allow read: if admin(); allow write: if false; }
+    match /userMetrics/{uid} { allow read: if admin(); allow write: if false; }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

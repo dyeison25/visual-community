@@ -1,0 +1,18 @@
+# Lista permitida: nunca enviar .env, credenciales, artefactos ni herramientas.
+**
+!Dockerfile
+!.dockerignore
+!Backend/
+!Backend/package.json
+!Backend/bun.lock
+!Backend/tsconfig.json
+!Backend/index.ts
+!Backend/src/
+!Backend/src/**
+!shared/
+!shared/**
+**/.env*
+**/*service-account*.json
+**/*adminsdk*.json
+**/*.pem
+**/*.key

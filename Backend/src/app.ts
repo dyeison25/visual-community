@@ -1,0 +1,34 @@
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import authRoutes from "./routes/auth.routes";
+import energyRoutes from "./routes/energy.routes";
+import profileRoutes from "./routes/profile.routes";
+import adminRoutes from "./routes/admin.routes";
+import { requireAdmin } from "./middleware/admin.middleware";
+import { authConfig } from "./config/auth.config";
+import { requireAuth } from "./middleware/auth.middleware";
+import { rateLimit } from "./middleware/rate-limit.middleware";
+import { discoveryRoutes } from "./routes/discovery.routes";
+import { chatRoutes } from "./routes/chat.routes";
+const app = express();
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({ origin: authConfig.allowedOrigins }));
+app.use(express.json({ limit: "24kb" }));
+// Ninguna respuesta autenticada debe almacenarse en una caché compartida.
+app.use("/api", (_req, res, next) => { res.setHeader("Cache-Control", "private, no-store"); next(); });
+app.get(["/", "/api/health"], (_req, res) => res.json({ ok: true, name: "Visual Community", authMode: process.env.FIREBASE_AUTH_EMULATOR_HOST ? "emulator" : "firebase" }));
+app.use("/api/auth", authRoutes);
+app.use("/api/discovery", requireAuth, rateLimit, discoveryRoutes);
+app.use("/api/chat", requireAuth, rateLimit, chatRoutes);
+app.use("/api/energy", requireAuth, rateLimit, energyRoutes);
+app.use("/api/profile", requireAuth, rateLimit, requireAdmin, profileRoutes);
+app.use("/api/admin", requireAuth, rateLimit, requireAdmin, adminRoutes);
+app.use((_req, res) => res.status(404).json({ message: "Recurso no encontrado." }));
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const tooLarge = typeof error === "object" && error !== null && "type" in error && error.type === "entity.too.large";
+  const badRequest = error instanceof SyntaxError;
+  res.status(tooLarge ? 413 : badRequest ? 400 : 500).json({ message: tooLarge ? "La solicitud supera el tamaño permitido." : badRequest ? "La solicitud no tiene un formato válido." : "No pudimos completar la consulta. Intenta de nuevo." });
+});
+export { app };

@@ -1,0 +1,73 @@
+# =========================
+# DEPENDENCIAS
+# =========================
+node_modules/
+
+# =========================
+# VARIABLES DE ENTORNO
+# =========================
+.env
+.env.*
+!.env.example
+
+deploy/.env*
+!deploy/.env.example
+
+# =========================
+# CREDENCIALES Y SECRETOS
+# =========================
+**/firebase-service-account.json
+**/*firebase-adminsdk*.json
+**/service-account*.json
+**/*service-account*.json
+**/serviceAccountKey.json
+**/*.pem
+**/*.key
+
+# =========================
+# ARCHIVOS DE COMPILACIÓN
+# =========================
+**/dist/
+**/out/
+*.tsbuildinfo
+**/.cache/
+
+# =========================
+# FIREBASE
+# =========================
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# =========================
+# LOGS
+# =========================
+*.log
+**/logs/
+
+# =========================
+# PRUEBAS Y COBERTURA
+# =========================
+test-results/
+playwright-report/
+coverage/
+artifacts/
+**/*.lcov
+
+# =========================
+# ARCHIVOS TEMPORALES
+# =========================
+**/*.tgz
+**/.eslintcache
+**/.DS_Store
+
+# =========================
+# IDE
+# =========================
+**/.idea/
+
+# =========================
+# REPORTES GENERADOS POR EL BACKEND
+# =========================
+Backend/**/report.[0-9]_[0-9]_[0-9]_[0-9].json

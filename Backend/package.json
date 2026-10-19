@@ -1,0 +1,28 @@
+{
+    "name": "backend",
+    "module": "index.ts",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "bun --watch index.ts",
+        "typecheck": "tsc --noEmit",
+        "build": "bun run typecheck && bun build index.ts --target bun --packages external --outfile dist/index.js",
+        "start": "bun dist/index.js",
+        "verify:integrations": "bun scripts/verify-integrations.ts"
+    },
+    "devDependencies": {
+        "@types/bun": "latest",
+        "@types/cors": "^2.8.19",
+        "@types/express": "^5.0.6",
+        "google-auth-library": "^10.0.0",
+        "typescript": "^5.9.3"
+    },
+    "dependencies": {
+        "@google/genai": "^2.23.0",
+        "algoliasearch": "^5.59.0",
+        "cors": "^2.8.6",
+        "express": "^5.2.1",
+        "firebase-admin": "^13.10.0",
+        "helmet": "^8.1.0"
+    }
+}

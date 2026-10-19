@@ -1,0 +1,3 @@
+# Fuente única para el contexto Docker y la carga de Cloud Build.
+# Directiva oficial de gcloud; no copiar aquí una segunda lista de patrones.
+#!include:.dockerignore

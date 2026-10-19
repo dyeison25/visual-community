@@ -1,0 +1,25 @@
+import { useCallback, useState, type FormEvent } from "react";
+import { Users, MapPin, Search, ArrowLeft, ArrowRight } from "lucide-react";
+import { useResource } from "../hooks/useResource";
+import { energyService } from "../services/energyService";
+import { CommunityDialog } from "../components/CommunityDialog";
+import { ArticleCard, Empty, ErrorState, Loading, Notice, PageHeading, SectionHeading, SourceLink, dateLabel } from "../components/UI";
+import { ArticleDialog } from "../components/ArticleDialog";
+import type { EnergyArticle, EnergyCommunity } from "../../../shared/models";
+import { MINISTRY_COMMUNITIES_PAGE } from "../../../shared/officialSources";
+export function CommunitiesPage() {
+  const [search, setSearch] = useState(""); const [query, setQuery] = useState(""); const [offset, setOffset] = useState(0); const [selected, setSelected] = useState<EnergyCommunity | null>(null);
+  const [article, setArticle] = useState<EnergyArticle | null>(null);
+  const loader = useCallback((signal: AbortSignal) => energyService.communities(offset, query, signal), [offset, query]);
+  const resource = useResource(loader); const articles = useResource(energyService.articles);
+  function submit(event: FormEvent) { event.preventDefault(); setOffset(0); setQuery(search.trim()); if (query === search.trim() && offset === 0) resource.refresh(); }
+  return <><PageHeading title="La energía se construye en comunidad." description="Explora el conocimiento y los registros públicos del Ministerio de Minas y Energía."/>
+    <div className="community-intro card"><span className="icon-tile"><Users size={28}/></span><div><p className="eyebrow">¿QUÉ SON LAS COMUNIDADES ENERGÉTICAS?</p><h2>Personas que se organizan alrededor de la energía.</h2><p>Las comunidades pueden participar en la generación, el uso eficiente y la gestión de la energía. Aquí puedes conocer la estrategia y consultar sus fuentes institucionales.</p><SourceLink source="MinEnergía" contentId="min-comunidades" url={MINISTRY_COMMUNITIES_PAGE}>Ministerio de Minas y Energía</SourceLink></div></div>
+    <SectionHeading title="Explorador de comunidades" eyebrow="INFORMACIÓN GEOGRÁFICA OFICIAL"><span className="source-tag">MINENERGÍA · ARCGIS</span></SectionHeading>
+    <form className="search-bar" onSubmit={submit}><Search size={20}/><input aria-label="Buscar comunidades" value={search} onChange={e => setSearch(e.target.value)} maxLength={80} placeholder="Busca una comunidad, municipio o departamento"/><button className="button primary" type="submit">Buscar</button></form>
+    {resource.loading ? <Loading label="Consultando registros de MinEnergía…"/> : resource.error ? <ErrorState message={resource.error} retry={resource.refresh}/> : resource.data && <><Notice>{resource.data.message}</Notice>{resource.data.status === "unavailable" ? <ErrorState message="No pudimos cargar los registros oficiales." retry={resource.refresh}/> : <><div className="results-heading"><p><strong>{resource.data.data.total?.toLocaleString("es-CO") ?? "—"}</strong> registros {query ? "encontrados" : "en la capa pública"}</p><span>Consulta: {dateLabel(resource.data.fetchedAt)}</span></div>{!resource.data.data.communities.length ? <Empty>No encontramos comunidades para esta búsqueda. Prueba con otro nombre o territorio.</Empty> : <div className="community-grid">{resource.data.data.communities.map(community => <article className="card community-card" key={community.id}><div className="community-card-head"><span className="icon-tile"><Users size={19}/></span><span className="soft-tag">{community.status || "Sin estado publicado"}</span></div><h3>{community.name}</h3><p className="location"><MapPin size={15}/>{community.municipality}, {community.department}</p><button className="text-button community-detail" aria-haspopup="dialog" onClick={() => setSelected(community)}>Ver información<ArrowRight size={15}/></button><span className="community-attribution">Ministerio de Minas y Energía</span></article>)}</div>}<div className="pagination"><button className="button secondary" disabled={!offset} onClick={() => { setOffset(Math.max(0, offset - 24)); setSelected(null); }}><ArrowLeft size={16}/>Anterior</button><span>Página {Math.floor(offset / 24) + 1}</span><button className="button secondary" disabled={!resource.data.data.hasMore} onClick={() => { setOffset(offset + 24); setSelected(null); }}>Siguiente<ArrowRight size={16}/></button></div></>}</>}
+    <SectionHeading title="Recursos para dar el siguiente paso" eyebrow="MINISTERIO DE MINAS Y ENERGÍA"/>
+    {articles.loading ? <Loading/> : articles.error ? <ErrorState message={articles.error} retry={articles.refresh}/> : <><p className="muted small">{articles.data?.message}</p><div className="article-grid">{articles.data?.data.map(item => <ArticleCard key={item.id} article={item} onOpen={setArticle}/>)}</div></>}
+    <CommunityDialog community={selected} close={() => setSelected(null)}/>
+    <ArticleDialog article={article} close={() => setArticle(null)}/></>;
+}
