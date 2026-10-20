@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 
 /**
  * Prepara la conexión del backend con Firebase una sola vez y devuelve Authentication.
- * Usa la cuenta de servicio privada o las credenciales del entorno del servidor.
+ * Prioriza variables privadas, archivo indicado, archivo local y finalmente ADC.
  * Comprueba que la cuenta corresponda al proyecto configurado.
  * Solo permite el emulador cuando se elige explícitamente un proyecto demo en desarrollo.
  */
@@ -18,15 +18,43 @@ export function getFirebaseAuth() {
       }
       initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID });
     } else {
-      const path = resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS || "firebase-service-account.json");
-      if (existsSync(path)) {
-        const account = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
-        if (process.env.FIREBASE_PROJECT_ID && account.project_id !== process.env.FIREBASE_PROJECT_ID) {
-          throw new Error("El proyecto Firebase no coincide con la cuenta de servicio.");
+      const projectId = process.env.FIREBASE_PROJECT_ID;
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+      if (projectId?.trim() && clientEmail?.trim() && privateKey?.trim()) {
+        try {
+          initializeApp({
+            credential: cert({ projectId, clientEmail, privateKey: privateKey.replace(/\\n/g, "\n") }),
+            projectId,
+          });
+        } catch {
+          // No propagar mensajes del SDK que puedan incluir material privado.
+          throw new Error("No se pudieron cargar las credenciales Firebase de las variables de entorno.");
         }
-        initializeApp({ credential: cert(account), projectId: process.env.FIREBASE_PROJECT_ID || account.project_id });
       } else {
-        initializeApp({ credential: applicationDefault(), projectId: process.env.FIREBASE_PROJECT_ID });
+        const paths = [process.env.GOOGLE_APPLICATION_CREDENTIALS, "firebase-service-account.json"]
+          .filter((path): path is string => Boolean(path?.trim()))
+          .map(path => resolve(path));
+        const path = paths.find(candidate => existsSync(candidate));
+        if (path) {
+          let account;
+          try {
+            account = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+            if (!account || typeof account !== "object" || Array.isArray(account)) throw new Error();
+          } catch {
+            throw new Error("No se pudo leer el archivo de credenciales Firebase.");
+          }
+          if (projectId && account.project_id !== projectId) {
+            throw new Error("El proyecto Firebase no coincide con la cuenta de servicio.");
+          }
+          try {
+            initializeApp({ credential: cert(account), projectId: projectId || account.project_id });
+          } catch {
+            throw new Error("No se pudieron cargar las credenciales del archivo Firebase.");
+          }
+        } else {
+          initializeApp({ credential: applicationDefault(), projectId: process.env.FIREBASE_PROJECT_ID });
+        }
       }
     }
   }

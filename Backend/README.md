@@ -16,6 +16,15 @@ bun run start
 
 Configura .env siguiendo .env.example. En local se admite la cuenta privada existente; en Cloud Run se utiliza la identidad del servidor mediante ADC. No publiques el archivo privado.
 
+Firebase Admin se inicializa en `src/config/firebase.config.ts`, una sola vez, con esta prioridad:
+
+1. `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`, si las tres están completas. La clave admite saltos de línea reales o `\n` escapados.
+2. Archivo existente indicado por `GOOGLE_APPLICATION_CREDENTIALS`.
+3. Archivo local `firebase-service-account.json`, relativo al directorio de ejecución (normalmente Backend).
+4. `applicationDefault()` para la identidad del servidor, como Cloud Run.
+
+En Render configura las tres variables del primer paso como variables privadas del servicio backend. No configures rutas a archivos de tu computadora, no uses prefijos VITE y no copies el JSON a Docker. Conserva también las variables habituales de la API, CORS, Gemini y Algolia. Reinicia o redespliega el backend después de guardar la configuración. Las credenciales inválidas no se ocultan usando otra identidad; se rechazan con un mensaje sin secretos. Si el conjunto de tres variables está incompleto, se siguen los fallbacks anteriores. Los emuladores conservan su tratamiento separado, solo en desarrollo con proyecto demo.
+
 ## Servicios
 
 MinEnergía: lista y mapa ArcGIS, enlaces públicos validados. CREG: catálogo de documentos oficiales. XM: generación, demanda y precio de bolsa. Algolia: búsqueda, candidatos y enriquecimiento del perfil. Gemini: único proveedor del chat, con modelo configurable. Administración: métricas e historial con acceso restringido.
