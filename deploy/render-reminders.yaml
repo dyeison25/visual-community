@@ -1,0 +1,42 @@
+# Plantilla revisable; importar este Blueprint crea un servicio facturable independiente.
+# No aplicar automáticamente. El contexto Docker es la raíz del repositorio.
+services:
+  - type: cron
+    name: visual-community-reminders
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: bun dist/send-inactivity-reminders.js
+    schedule: "*/15 * * * *"
+    plan: starter
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://sistemagestionpermanencia.web.app
+      - key: REMINDER_ENABLED
+        value: "false"
+      - key: REMINDER_DRY_RUN
+        value: "true"
+      - key: REMINDER_SEND_MODE
+        value: test
+      - key: REMINDER_TEST_USER_IDS
+        sync: false
+      - key: REMINDER_INACTIVITY_DAYS
+        value: "4"
+      - key: REMINDER_MAX_ATTEMPTS
+        value: "3"
+      - key: REMINDER_BATCH_SIZE
+        value: "50"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: NOTIFICATION_TOKEN_SECRET
+        sync: false

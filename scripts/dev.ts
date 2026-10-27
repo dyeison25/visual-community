@@ -6,7 +6,7 @@ const emulators = process.argv.includes("--emulators") || test;
 const env = { ...process.env, ...(emulators ? {
   FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099", FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080",
   FIREBASE_PROJECT_ID: "demo-visual-community", VITE_USE_FIREBASE_EMULATORS: "true",
-} : {}), ...(test ? { PORT: "3001", VITE_DEV_PORT: "5174", API_PROXY_TARGET: "http://127.0.0.1:3001", FRONTEND_ORIGIN: "http://127.0.0.1:5174" } : {}) };
+} : {}), ...(test ? { PORT: "3001", VITE_DEV_PORT: "5174", API_PROXY_TARGET: "http://127.0.0.1:3001", FRONTEND_ORIGIN: "http://127.0.0.1:5174", VITE_API_BASE_URL: "/api", REMINDER_ENABLED: "false", REMINDER_DRY_RUN: "true" } : {}) };
 const children: ReturnType<typeof spawn>[] = [];
 function start(cmd: string[], cwd = root) {
   const child = spawn(cmd, { cwd, env, stdout: "inherit", stderr: "inherit", stdin: "ignore" });

@@ -18,7 +18,8 @@
                     "test:rules":  "firebase emulators:exec --only auth,firestore --project demo-visual-community \"bun test tests/firestore.rules.test.ts\"",
                     "test:e2e:running":  "playwright test",
                     "test:production": "playwright test --config playwright.production.config.ts",
-                    "test:rules:running":  "bun test tests/firestore.rules.test.ts"
+                    "test:rules:running":  "bun test tests/firestore.rules.test.ts",
+                    "test:notifications": "firebase emulators:exec --only auth,firestore --project demo-visual-community \"bun test tests/notifications.integration.test.ts tests/firestore.rules.test.ts\""
                 },
     "devDependencies":  {
                             "@playwright/test":  "^1.58.2",

@@ -11,9 +11,21 @@ test("rechaza las rutas de datos sin sesión", async () => {
   }
   for (const path of ["/api/discovery/search", "/api/discovery/recommendations"]) expect((await fetch(base + path)).status).toBe(401);
   expect((await fetch(base + "/api/chat", { method:"POST" })).status).toBe(401);
+  expect((await fetch(base + "/api/activity", { method:"POST" })).status).toBe(401);
+  expect((await fetch(base + "/api/notifications/consent", { method:"POST" })).status).toBe(401);
   expect((await fetch(base + "/api/auth/me")).status).toBe(401);
   expect((await fetch(base + "/api/profile/metrics")).status).toBe(401);
   for (const path of ["/api/admin/summary", "/api/admin/users", "/api/admin/users/another-user"]) expect((await fetch(base + path)).status).toBe(401);
+});
+test("la baja pública nunca cambia preferencias por abrir una URL o token inválido", async () => {
+  const response = await fetch(base + "/api/notifications/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "invalid" }) });
+  expect(response.status).toBe(400);
+  expect((await response.json()).ok).toBe(false);
+  expect((await fetch(base + "/api/notifications/unsubscribe?token=" + "x".repeat(43))).status).toBe(404);
+  for (const body of [{ token: "x".repeat(43) }, { token: "x".repeat(43), confirm: false }, { token: "x".repeat(43), confirm: true, userId: "victim" }]) {
+    const request = await fetch(base + "/api/notifications/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    expect(request.status).toBe(400);
+  }
 });
 test("el login anterior no acepta correo y contraseña sin verificarlos", async () => {
   const response = await fetch(base + "/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "prueba@example.invalid", password: "incorrecta" }) });

@@ -23,8 +23,8 @@ try {
     await Bun.sleep(250);
   }
   if (!ready) throw Error("El backend compilado no quedó disponible.");
-  for (const route of ["/api/admin/summary", "/api/discovery/recommendations", "/api/energy/map"]) {
-    const response = await fetch(`http://127.0.0.1:${port}${route}`);
+  for (const [route, method] of [["/api/admin/summary", "GET"], ["/api/discovery/recommendations", "GET"], ["/api/energy/map", "GET"], ["/api/activity", "POST"], ["/api/notifications/consent", "POST"]]) {
+    const response = await fetch(`http://127.0.0.1:${port}${route}`, { method });
     if (response.status !== 401) throw Error("Una ruta de datos no rechazó acceso anónimo.");
   }
   console.log(JSON.stringify({ compiledApiStarts: true, productionMode: true, protectedRoutes: true, externalCalls: 0 }));

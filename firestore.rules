@@ -17,14 +17,23 @@ service cloud.firestore {
         && p.formats.toSet().size() == p.formats.size()
         && p.formats.hasOnly(['news','statistics','regulation','communities','projects','education']);
     }
+    function validEmailNotifications(n) {
+      return n is map
+        && n.keys().hasOnly(['enabled','consentedAt','revokedAt','updatedAt'])
+        && n.enabled is bool
+        && (!('consentedAt' in n) || n.consentedAt is timestamp || n.consentedAt == null)
+        && (!('revokedAt' in n) || n.revokedAt is timestamp || n.revokedAt == null)
+        && (!('updatedAt' in n) || n.updatedAt is timestamp);
+    }
     function validProfile(uid) {
       let p = request.resource.data;
       return p.keys().hasAll(['userId','name','interests','preferences','role','onboardingCompleted','createdAt','updatedAt'])
-        && p.keys().hasOnly(['userId','name','interests','preferences','role','onboardingCompleted','createdAt','updatedAt'])
+        && p.keys().hasOnly(['userId','name','interests','preferences','role','onboardingCompleted','emailNotifications','createdAt','updatedAt'])
         && p.userId == uid && p.name is string && p.name.size() >= 2 && p.name.size() <= 80
         && p.interests is list && p.interests.size() <= 5
         && p.interests.hasOnly(['Energía solar','Comunidades energéticas','Normativa','Datos del sector','Consumo responsable'])
         && validPreferences(p.preferences) && p.role in ['user','admin']
+        && (!('emailNotifications' in p) || validEmailNotifications(p.emailNotifications))
         && p.onboardingCompleted is bool && (!p.onboardingCompleted || p.preferences.topics.size() > 0)
         && p.createdAt is timestamp && p.updatedAt == request.time;
     }
@@ -33,10 +42,13 @@ service cloud.firestore {
       // Solo un entorno administrativo de confianza puede asignar el rol admin.
       allow create: if owner(uid) && validProfile(uid)
         && request.resource.data.role == 'user' && request.resource.data.onboardingCompleted == false
+        && (!('emailNotifications' in request.resource.data) || request.resource.data.emailNotifications.enabled == false)
         && request.resource.data.createdAt == request.time;
       allow update: if owner(uid) && validProfile(uid)
         && request.resource.data.role == resource.data.get('role', 'user')
         && request.resource.data.createdAt == resource.data.createdAt
+        // El consentimiento y sus fechas se modifican mediante el backend autenticado.
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['emailNotifications'])
         && (request.resource.data.onboardingCompleted || !resource.data.get('onboardingCompleted', false));
       allow delete: if false;
     }

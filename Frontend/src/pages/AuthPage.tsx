@@ -14,7 +14,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" | "reset" }) {
   const [visible, setVisible] = useState(false); const [consent, setConsent] = useState(false); const [error, setError] = useState(""); const [success, setSuccess] = useState("");
   const register = mode === "register"; const reset = mode === "reset";
   if (state.loading) return <Loading label="Recuperando tu sesión…"/>;
-  if (state.user && !state.busy) return <Navigate to={typeof location.state?.from === "string" && /^\/(?!\/)/.test(location.state.from) ? location.state.from : "/"} replace/>;
+  const from = typeof location.state?.from === "string" ? location.state.from : "/";
+  const safeFrom = !/[\\\r\n]/.test(from) && /^\/(?!\/)/.test(from) && (["/", "/buscar", "/perfil", "/comunidades", "/normativa", "/datos", "/admin", "/bienvenida"].some(route => from === route || from.startsWith(route + "?")) || /^\/admin\/usuarios\/[a-zA-Z0-9_-]+$/.test(from)) ? from : "/";
+  if (state.user && !state.busy) return <Navigate to={safeFrom} replace/>;
   /**
    * Gestiona el envío del formulario sin recargar la página.
    * Valida el correo y los campos necesarios para login, registro o recuperación.

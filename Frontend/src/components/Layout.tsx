@@ -7,6 +7,7 @@ import { Notice } from "./UI";
 import { usingEmulators } from "../config/firebase";
 import { interactionService } from "../services/interactionService";
 import { ChatWidget } from "./ChatWidget";
+import { activityService } from "../services/activityService";
 const navigation = [
   { to: "/buscar", name: "Buscar información", icon: Search },
   { to: "/", name: "Inicio", icon: LayoutDashboard },
@@ -33,6 +34,12 @@ function Layout() {
   const menuItems = profile?.role === "admin" ? [...navigation, { to: "/admin", name: "Administración", icon: ShieldCheck }] : navigation;
   const section = location.pathname.startsWith("/admin") ? "Administración" : menuItems.find(item => item.to === location.pathname)?.name || "Visual Community";
   useEffect(() => { setMenu(false); document.title = section + " · Visual Community"; }, [location.pathname, section]);
+  useEffect(() => {
+    activityService.reset(user?.uid || ""); void activityService.touch("session_resume");
+    const visible = () => { if (document.visibilityState === "visible") void activityService.touch("session_resume"); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { document.removeEventListener("visibilitychange", visible); };
+  }, [user?.uid]);
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Saltar al contenido</a>
     {menu && <button className="sidebar-overlay" aria-label="Cerrar navegación" onClick={() => setMenu(false)}/>}

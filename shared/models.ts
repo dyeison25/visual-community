@@ -29,6 +29,13 @@ export interface UserProfile {
   userId: string; name: string; interests: string[];
   preferences: { compactMetrics: boolean; topics?: string[]; formats?: string[] };
   role?: "user" | "admin"; onboardingCompleted?: boolean;
+  /** Preferencia explícita de recordatorios. Las fechas las escribe únicamente el backend. */
+  emailNotifications?: {
+    enabled: boolean;
+    consentedAt?: unknown | null;
+    revokedAt?: unknown | null;
+    updatedAt?: unknown;
+  };
   createdAt?: unknown; updatedAt?: unknown;
 }
 

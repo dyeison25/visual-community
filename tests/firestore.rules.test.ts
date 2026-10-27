@@ -38,6 +38,7 @@ describe("Roles, encuesta y aislamiento por uid", () => {
     await assertSucceeds(setDoc(ref, profile("rules-escalation")));
     await assertFails(updateDoc(ref, { role: "admin", updatedAt: serverTimestamp() }));
     await assertFails(updateDoc(ref, { role: deleteField(), updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(ref, { emailNotifications: { enabled: true, updatedAt: serverTimestamp() }, updatedAt: serverTimestamp() }));
     await assertFails(deleteDoc(ref));
     expect((await getDoc(ref)).data()?.role).toBe("user");
   });
@@ -93,6 +94,9 @@ describe("Roles, encuesta y aislamiento por uid", () => {
     await assertFails(deleteDoc(doc(db, "profiles", "rules-events", "interactions", "LOGIN")));
     await assertFails(updateDoc(doc(db, "profiles", "rules-alice"), { role: "admin", updatedAt: serverTimestamp() }));
     await assertFails(setDoc(doc(db, "userMetrics", "rules-alice"), { score: 9999 }));
+    await assertFails(setDoc(doc(db, "userActivity", "rules-alice"), { cycleId: "forged" }));
+    await assertFails(setDoc(doc(db, "emailReminders", "rules-alice_cycle"), { status: "accepted" }));
+    await assertFails(setDoc(doc(db, "unsubscribeTokens", "forged"), { userId: "rules-alice" }));
   });
   test("la revocación del rol se aplica sin cambiar el token", async () => {
     const admin = env.authenticatedContext("rules-admin").firestore();
@@ -116,4 +120,22 @@ test("metadatos de descubrimiento y perfil de intereses permanecen protegidos", 
   await assertFails(setDoc(doc(db,"profiles","rules-discovery","interactions","bad-category"),{
     ...event("rules-discovery"),eventType:"SEARCH",metadata:{category:"unknown"}
   }));
+});
+
+test("preferencia de correo y registros internos solo pueden escribirse desde backend", async () => {
+  const uid = "rules-notifications"; const own = env.authenticatedContext(uid).firestore();
+  const other = env.authenticatedContext("rules-notifications-other").firestore(); const target = doc(own, "profiles", uid);
+  await assertFails(setDoc(target, { ...profile(uid), emailNotifications: { enabled: true } }));
+  await assertSucceeds(setDoc(target, { ...profile(uid), emailNotifications: { enabled: false } }));
+  await assertFails(updateDoc(target, { "emailNotifications.enabled": true, updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(target, { emailNotifications: deleteField(), updatedAt: serverTimestamp() }));
+  await env.withSecurityRulesDisabled(context => updateDoc(doc(context.firestore(), "profiles", uid), { emailNotifications: { enabled: true, consentedAt: Timestamp.now(), updatedAt: Timestamp.now(), revokedAt: null } }));
+  // El nuevo campo no rompe la edición de nombre/preferencias existente.
+  await assertSucceeds(updateDoc(target, { name: "Nombre actualizado", updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(other, "profiles", uid), { "emailNotifications.enabled": false, updatedAt: serverTimestamp() }));
+  for (const path of ["userActivity/" + uid, "emailReminders/example", "unsubscribeTokens/example", "notificationAudit/example", "notificationJobs/inactivity"]) {
+    await assertFails(setDoc(doc(own, path), { userId: uid }));
+    await assertFails(getDoc(doc(own, path)));
+    await assertFails(setDoc(doc(other, path), { userId: uid }));
+  }
 });

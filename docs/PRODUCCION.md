@@ -1,6 +1,43 @@
 # Lanzamiento de Visual Community
 
-Preparación: 19 de octubre de 2026. **El alojamiento todavía no está habilitado, según confirmó el propietario. No hay URL pública publicada ni pruebas posdespliegue realizadas.** No confundir el build local con un lanzamiento completado.
+Actualización: 27 de octubre de 2026. El propietario confirmó estos despliegues activos:
+
+- Frontend React/Vite: https://sistemagestionpermanencia.web.app — Firebase Hosting.
+- API Express/Bun: https://visual-community-api.onrender.com — Render.
+
+Esta actualización implementa localmente recordatorios por correo. Sus cambios todavía deben publicarse y el servicio de correo/Cron debe configurarse manualmente. No se habilitaron envíos generales, facturación ni nuevas reglas remotas durante esta entrega.
+
+## Publicación actual: Render y Firebase Hosting
+
+Se conserva Firebase Authentication, Firestore, Algolia, Gemini y Leaflet. El navegador usa `VITE_API_BASE_URL=https://visual-community-api.onrender.com/api`. El backend permite mediante `FRONTEND_ORIGIN` el origen HTTPS exacto de Hosting. Hosting ya reescribe todas las rutas SPA hacia index.html, incluida la nueva ruta pública de baja; no se requiere cambiar firebase.json.
+
+En Render mantener `NODE_ENV=production`, `HOST=0.0.0.0` y el puerto provisto por la plataforma. Firebase Admin utiliza `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`, normalizando saltos escapados de la clave. No subir JSON ni configurar una ruta local del equipo en Render. Las variables de Gemini y Algolia actuales permanecen únicamente en el API.
+
+Con el Dockerfile existente, el contexto de build es la raíz del repositorio, no Backend. La imagen contiene los bundles del API y del Cron y sus dependencias de producción. El comando web sigue siendo `bun dist/index.js`; el job usa `bun dist/send-inactivity-reminders.js`. No hay migración ni reindexación durante el build.
+
+## Recordatorios: publicación por pasos
+
+La guía completa está en [NOTIFICACIONES_CORREO.md](NOTIFICACIONES_CORREO.md), con variables, costos, bajas y recuperación de resultados inciertos. La plantilla `deploy/render-reminders.yaml` crea un Cron independiente si se importa manualmente; no se aplica al servicio web existente.
+
+1. Ejecutar `bun run typecheck`, `bun test Backend/tests`, `bun run test:notifications`, las E2E de notificaciones y `bun run build`. Las pruebas del correo usan transporte simulado exclusivamente en las pruebas.
+2. Publicar las reglas revisadas manualmente, conservando el proyecto actual: `bunx firebase deploy --only firestore:rules --project sistemagestionpermanencia`. Las colecciones internas de correo/actividad permanecen inaccesibles al navegador.
+3. Redesplegar el API Render actual. Confirmar `/api/health`, CORS, rutas nuevas autenticadas y rechazo de solicitudes anónimas de actividad/consentimiento.
+4. Publicar Hosting con la configuración pública actual. El script existente `deploy/frontend.ps1` recibe el origen API sin `/api` y añade el sufijo. Verificar el sitio exacto antes de ejecutarlo; no desplegar índices ni reemplazar usuarios/datos.
+5. Crear el Cron Render, cada 15 minutos (`*/15 * * * *`, UTC), con variables privadas de Firebase y correo. Mantener `REMINDER_ENABLED=false`, `REMINDER_DRY_RUN=true`, `REMINDER_SEND_MODE=test`.
+6. Ejecutar Trigger Run en modo seco y revisar contadores. Los ensayos de correo posteriores deben limitarse a `REMINDER_TEST_USER_IDS`; el envío general requiere revisión posterior explícita.
+
+La nueva página pública `/notificaciones/baja` no obliga a iniciar sesión y no revoca por GET. El usuario confirma y el backend valida un token opaco, expiración y uso único. Las rutas protegidas de correo mantienen la ruta de destino tras login.
+
+## Comprobación posterior a publicar
+
+Verificar registro, encuesta, edición de preferencias y notificaciones, recuperación de sesión y logout, administración protegida y las integraciones existentes. Revisar apertura directa de `/buscar?category=regulation` tras login y de la baja sin sesión en escritorio y móvil. Validar un ensayo de correo con una cuenta de prueba consentida, su baja y la ejecución repetida del job antes de habilitar destinatarios generales. Las pruebas locales no certifican entrega real al buzón ni una revisión todavía no desplegada.
+
+Los informes de preproducción anteriores son históricos. El despliegue actual fue informado por el propietario; ninguna funcionalidad nueva se declara verificada en producción sin publicar y probar esa revisión.
+
+<details>
+<summary>Referencia histórica: preparación de Cloud Run del 19 de octubre (no es el despliegue actual)</summary>
+
+Los procedimientos siguientes se conservan como referencia técnica de aquella preparación. No ejecutarlos para configurar el backend actual de Render.
 
 ## Arquitectura que se conserva
 
@@ -125,4 +162,6 @@ Si una prueba falla, conservar la revisión previa de Hosting y Cloud Run. Rever
 
 ## Estado de esta entrega
 
-Consultar `INFORME_PREPRODUCCION.md` para resultados y limitaciones. Las URLs, el build remoto de la imagen y todas las verificaciones posdespliegue siguen pendientes hasta que el propietario habilite alojamiento y permisos.
+Consultar `INFORME_PREPRODUCCION.md` para los resultados históricos de esa preparación. Para el despliegue actual y la Etapa 1 de correo se aplican las secciones iniciales de este documento.
+
+</details>

@@ -2,6 +2,7 @@ import { collection, doc, setDoc, serverTimestamp, query, orderBy, limit, getDoc
 import { auth, db } from "../config/firebase";
 import type { Interaction, InteractionInput } from "../../../shared/models";
 import { deadline } from "./errors";
+import { activityService } from "./activityService";
 type SyncStatus = "ready" | "pending" | "error";
 let status: SyncStatus = "ready";
 const listeners = new Set<() => void>();
@@ -21,6 +22,7 @@ export const interactionService = {
   async track(input: InteractionInput): Promise<boolean> {
     const user = auth?.currentUser;
     if (!user || !db) return false;
+    if (input.eventType !== "LOGOUT") void activityService.touch("interaction");
     const metadata: NonNullable<InteractionInput["metadata"]> = {};
     // Solo rutas internas, sin querystrings, correos, IP, credenciales ni huellas del dispositivo.
     if (input.metadata?.path) metadata.path = input.metadata.path.split("?")[0].slice(0, 100);

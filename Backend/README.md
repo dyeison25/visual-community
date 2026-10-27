@@ -14,7 +14,7 @@ bun run build
 bun run start
 ```
 
-Configura .env siguiendo .env.example. En local se admite la cuenta privada existente; en Cloud Run se utiliza la identidad del servidor mediante ADC. No publiques el archivo privado.
+Configura .env siguiendo .env.example. La API pública actual está en Render: https://visual-community-api.onrender.com. En local se admite la cuenta privada existente; en Render usa las variables privadas descritas abajo. No publiques el archivo privado.
 
 Firebase Admin se inicializa en `src/config/firebase.config.ts`, una sola vez, con esta prioridad:
 
@@ -38,3 +38,11 @@ bun run verify:integrations --map --gemini comprueba servicios reales sin escrib
 bun scripts/index-content.ts --dry-run revisa el catálogo sin publicarlo. Los scripts de preparación de perfiles y publicación de reglas son herramientas administrativas; no se ejecutan durante el arranque ni el despliegue.
 
 Ver [producción](../docs/PRODUCCION.md), [personalización](../docs/PERSONALIZACION_ALGOLIA.md) y [auditoría](../docs/AUDITORIA_PRODUCCION.md).
+
+## Recordatorios de inactividad — Etapa 1
+
+Ver [guía completa](../docs/NOTIFICACIONES_CORREO.md). `bun run build` también compila el job. `bun run reminders` lo ejecuta desde esta carpeta; por defecto está desactivado y en simulación. No debe habilitarse para todos los usuarios sin revisar los ensayos.
+
+Nuevas rutas: `POST /api/activity` y `POST /api/notifications/consent` requieren el ID token. `POST /api/notifications/unsubscribe` es público, limitado por IP y exige token opaco más `confirm: true`; ningún GET realiza una baja. El uid del consentimiento y la actividad siempre procede de la sesión verificada.
+
+El job usa la API REST oficial de Resend desde backend, con copia cifrada de la solicitud e idempotencia de 23 horas (el proveedor conserva claves 24 horas). Los estados ambiguos fuera de esa ventana quedan en `needs_review`; no se genera automáticamente otra clave. No se añadieron dependencias. Las pruebas de correo sustituyen el transporte solo en las pruebas y no envían mensajes reales.

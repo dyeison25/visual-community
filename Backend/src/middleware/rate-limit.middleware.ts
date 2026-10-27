@@ -10,3 +10,17 @@ export const rateLimit: RequestHandler = (_req, res, next) => {
   }
   requests.set(uid, entry); next();
 };
+
+/** Límite independiente para la baja pública, que no dispone de uid autenticado. */
+const publicRequests = new Map<string, { count: number; until: number }>();
+export const publicRateLimit: RequestHandler = (req, res, next) => {
+  const now = Date.now();
+  for (const [key, value] of publicRequests) if (value.until < now) publicRequests.delete(key);
+  const key = req.ip || "unknown";
+  const entry = publicRequests.get(key) ?? { count: 0, until: now + 60_000 };
+  if (++entry.count > 12 || publicRequests.size > 10_000) {
+    res.setHeader("Retry-After", "60");
+    res.status(429).json({ message: "Espera un momento antes de volver a intentarlo." }); return;
+  }
+  publicRequests.set(key, entry); next();
+};

@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig(({ command, mode }) => {
   const env = { ...loadEnv(mode, process.cwd(), "VITE_"), ...process.env };
   if (command === "build") {
-    const unsafe = Object.keys(env).filter(name => name.startsWith("VITE_") && /GEMINI|OPENAI|ALGOLIA|PRIVATE|SECRET|PASSWORD|CREDENTIAL/i.test(name));
+    const unsafe = Object.keys(env).filter(name => name.startsWith("VITE_") && /GEMINI|OPENAI|ALGOLIA|RESEND|EMAIL_FROM|PRIVATE|SECRET|PASSWORD|CREDENTIAL/i.test(name));
     if (unsafe.length) throw new Error("Variables privadas no permitidas en Vite: " + unsafe.join(", "));
     if (process.env.VC_RELEASE_BUILD === "true") {
       const required = ["VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_API_BASE_URL"];

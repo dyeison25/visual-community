@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { UserRound, Save, Pencil, ShieldCheck } from "lucide-react";
+import { UserRound, Save, Pencil, ShieldCheck, Bell } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { profileService } from "../services/profileService";
 import { interactionService } from "../services/interactionService";
 import { profileTopics, topicLabel, formatLabel, validatePreferences } from "../../../shared/preferences";
 import { PreferenceFields } from "../components/PreferenceFields";
 import { dateLabel, ErrorState, Notice, PageHeading, SectionHeading } from "../components/UI";
+import { notificationService } from "../services/notificationService";
 /** Mi perfil contiene datos de cuenta y preferencias; el seguimiento se consulta en Administración. */
 export function ProfilePage() {
   const { user, profile } = useAuth();
@@ -14,9 +15,10 @@ export function ProfilePage() {
   const [topics, setTopics] = useState(() => profileTopics(profile));
   const [formats, setFormats] = useState(profile?.preferences.formats || []);
   const [editing, setEditing] = useState(false);
+  const [emailNotifications, setEmailNotifications] = useState(profile?.emailNotifications?.enabled || false);
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
   useEffect(() => {
-    if (profile) { setName(profile.name); setCompact(profile.preferences.compactMetrics); setTopics(profileTopics(profile)); setFormats(profile.preferences.formats || []); }
+    if (profile) { setName(profile.name); setCompact(profile.preferences.compactMetrics); setTopics(profileTopics(profile)); setFormats(profile.preferences.formats || []); setEmailNotifications(profile.emailNotifications?.enabled || false); }
   }, [profile]);
   async function save(event: FormEvent) {
     event.preventDefault(); setError(""); setMessage("");
@@ -39,6 +41,12 @@ export function ProfilePage() {
       await interactionService.track({ eventType: "SELECT_PREFERENCES", metadata: { section: "profile" } });
       setEditing(false); setMessage("Tus preferencias se actualizaron correctamente.");
     } catch { setError("No pudimos confirmar tus preferencias. Intenta nuevamente."); }
+    finally { setBusy(false); }
+  }
+  async function saveEmailNotifications(enabled: boolean) {
+    setBusy(true); setError(""); setMessage("");
+    try { await notificationService.setConsent(enabled, "profile"); setMessage(enabled ? "Activaste los recordatorios por correo." : "Desactivaste los recordatorios por correo."); }
+    catch { setEmailNotifications(profile?.emailNotifications?.enabled === true); setError("No pudimos actualizar tus recordatorios. Intenta nuevamente."); }
     finally { setBusy(false); }
   }
   return <><PageHeading title="Este es tu espacio." description="Gestiona tu cuenta y elige los temas que quieres descubrir."/>
@@ -67,6 +75,9 @@ export function ProfilePage() {
     </form> : <><div className="tag-list">{profileTopics(profile).map(id => <span className="soft-tag" key={id}>{topicLabel(id)}</span>)}</div>
       {!profileTopics(profile).length && <p className="muted">Aún no has elegido temas.</p>}
       <p className="muted small preference-caption">Contenido preferido</p><div className="tag-list">{profile?.preferences.formats?.length ? profile.preferences.formats.map(id => <span className="soft-tag" key={id}>{formatLabel(id)}</span>) : <p className="muted small">Sin preferencia de formato.</p>}</div></>}
+    </section>
+    <section className="card preferences-card"><SectionHeading title="Recordatorios por correo" eyebrow="NOTIFICACIONES"><Bell size={19}/></SectionHeading>
+      <label className="checkbox-label preference"><input type="checkbox" checked={emailNotifications} disabled={busy} onChange={event => { const enabled = event.target.checked; setEmailNotifications(enabled); void saveEmailNotifications(enabled); }}/><span><strong>Quiero recibir recordatorios para volver a Visual Community</strong><small>Solo los recibirás si das tu consentimiento y pasan varios días sin actividad. Puedes retirarlo aquí o desde el enlace incluido en cada correo.</small></span></label>
     </section>
   </>;
 }

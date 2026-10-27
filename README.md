@@ -4,12 +4,13 @@ Plataforma independiente sobre comunidades energéticas de Colombia: React + Typ
 
 ## Estado y lanzamiento
 
-**El alojamiento todavía no está habilitado. No hay URL pública ni lanzamiento completado.** La aplicación está preparada para Firebase Hosting (web) y Cloud Run (API). No se modificaron usuarios, documentos, índices ni reglas remotas durante la limpieza.
+El frontend está publicado en https://sistemagestionpermanencia.web.app (Firebase Hosting) y la API en https://visual-community-api.onrender.com (Render), según la configuración confirmada por el propietario. Los cambios locales de notificaciones requieren publicar una nueva versión y sus reglas antes de estar disponibles allí.
 
 - [Configuración y publicación](docs/PRODUCCION.md).
 - [Resultados y pendientes](docs/INFORME_PREPRODUCCION.md).
 - [Auditoría y evidencia de limpieza](docs/AUDITORIA_PRODUCCION.md).
 - [Estructura, duplicaciones y ubicaciones canónicas](docs/ESTRUCTURA_Y_DUPLICADOS.md).
+- [Recordatorios por correo: pruebas, bajas y Cron de Render](docs/NOTIFICACIONES_CORREO.md).
 
 Gemini es el único proveedor activo del asistente. El adaptador antiguo de OpenAI fue retirado.
 
@@ -47,9 +48,9 @@ bun run test:e2e
 bun run build
 ```
 
-El build genera Backend/dist/index.js y Frontend/dist y revisa que el bundle web no contenga secretos. Desde Backend, bun run start ejecuta la API compilada. En producción exige configuración completa, CORS HTTPS y ausencia de emuladores.
+El build genera Backend/dist/index.js, Backend/dist/send-inactivity-reminders.js y Frontend/dist y revisa que el bundle web no contenga secretos. Desde Backend, bun run start ejecuta la API compilada. En producción exige configuración completa, CORS HTTPS y ausencia de emuladores.
 
-Con Docker Desktop iniciado en modo Linux, `./scripts/verify-container.ps1` construye y verifica el contenedor de producción sin red externa durante la prueba, sin claves reales y sin publicar puertos. Esta comprobación local ya pasó; el despliegue remoto sigue pendiente.
+Con Docker Desktop iniciado en modo Linux, `./scripts/verify-container.ps1` construye y verifica el contenedor de producción sin red externa durante la prueba, sin claves reales y sin publicar puertos. Las comprobaciones históricas y el lanzamiento actual se distinguen en la documentación de producción.
 
 bun run dev:emulators usa cuentas locales del proyecto demo. Algunas pruebas simulan fallos de proveedores; no se utilizan mocks para sustituir datos de la aplicación.
 
@@ -62,4 +63,4 @@ Desde Backend, bun run verify:integrations --map --gemini comprueba servicios re
 - [Fuentes oficiales](docs/FUENTES_OFICIALES.md).
 - [Gemini](docs/GEMINI.md).
 
-Los informes anteriores se conservan como evidencia histórica. Esta versión calcula afinidad y recomendaciones; no clasifica riesgo de abandono ni envía campañas automáticas.
+Los informes anteriores se conservan como evidencia histórica. Esta versión calcula afinidad y recomendaciones; los recordatorios por inactividad están implementados con consentimiento explícito y permanecen desactivados por defecto. No hay clasificación de riesgo de abandono. La Etapa 2 (mapa contextual en búsqueda) sigue pendiente de revisión.

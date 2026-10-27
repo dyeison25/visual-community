@@ -20,6 +20,7 @@ export const profileService = {
           userId: uid, name: safeName.length >= 2 ? safeName : "Miembro",
           interests: [], preferences: { compactMetrics: false, topics: [], formats: [] },
           role: "user", onboardingCompleted: false,
+          emailNotifications: { enabled: false },
           createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
         });
         return;
