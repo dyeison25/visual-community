@@ -36,6 +36,8 @@ Resend conserva claves 24 horas. La aplicación permite recuperación durante 23
 
 `emailReminders/{id}/attempts/{leaseId}` conserva inicio y resultado de cada intento. `notificationJobs/inactivity` contiene el lock del job, cursores y resumen. La selección pagina por perfiles con consentimiento y conserva un cursor en ejecuciones reales para evitar que usuarios ya notificados bloqueen los siguientes. También recupera envíos pendientes de ciclos anteriores. La comprobación de consentimiento y actividad se repite justo antes del HTTP; una petición que ya esté en vuelo no puede cancelarse después de ser aceptada por Resend.
 
+Una lista de UIDs no vacía se comprueba en ambos recorridos antes de reparar actividad o reclamar/cancelar recordatorios. Un ensayo con un único UID no modifica registros individuales de otros usuarios. El lock y los cursores globales de `notificationJobs/inactivity` siguen coordinando las ejecuciones reales; no son registros individuales. Como antes, la lista también restringe el modo general si se configura allí. El envío test exige una lista explícita; un dry-run con lista vacía puede contar candidatos sin escribir ni enviar.
+
 ## Baja pública
 
 Cada correo tiene un enlace a `/notificaciones/baja#t=...`. La ruta está fuera de los controles de sesión. Abrirla únicamente muestra la confirmación; no se llama al backend hasta pulsar el botón. El token se conserva en memoria y se retira de la barra de direcciones. El fragmento no se transmite a Firebase Hosting en la petición de página.

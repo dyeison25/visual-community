@@ -12,7 +12,7 @@ import { openEmail } from "../Backend/src/services/notifications/envelope";
 if (process.env.FIRESTORE_EMULATOR_HOST !== "127.0.0.1:8080") throw new Error("Ejecuta test:notifications con el emulador oficial.");
 const app = initializeApp({ projectId: "demo-visual-community-notifications" }, "notifications-integration");
 const db = getFirestore(app); const DAY = 86_400_000; let clock = Date.now();
-const keys = ["REMINDER_ENABLED", "REMINDER_DRY_RUN", "REMINDER_SEND_MODE", "REMINDER_TEST_USER_IDS", "RESEND_API_KEY", "EMAIL_FROM", "NOTIFICATION_TOKEN_SECRET", "FRONTEND_URL", "REMINDER_BATCH_SIZE"];
+const keys = ["REMINDER_ENABLED", "REMINDER_DRY_RUN", "REMINDER_SEND_MODE", "REMINDER_TEST_USER_IDS", "RESEND_API_KEY", "EMAIL_FROM", "NOTIFICATION_TOKEN_SECRET", "FRONTEND_URL", "REMINDER_BATCH_SIZE", "REMINDER_INACTIVITY_DAYS", "REMINDER_MAX_ATTEMPTS"];
 const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 const message: FrozenEmail = { from: "fixture@example.invalid", to: ["recipient@example.invalid"], subject: "Fixture", html: "<p>Fixture</p>", text: "Fixture", tags: [] };
 const collections = ["profiles", "userActivity", "emailReminders", "unsubscribeTokens", "notificationAudit", "notificationJobs"];
@@ -21,7 +21,7 @@ beforeAll(() => {
 });
 beforeEach(async () => {
   clock = Date.now();
-  Object.assign(process.env, { REMINDER_ENABLED: "true", REMINDER_DRY_RUN: "false", REMINDER_SEND_MODE: "test", REMINDER_TEST_USER_IDS: "alice,bob", REMINDER_BATCH_SIZE: "50" });
+  Object.assign(process.env, { REMINDER_ENABLED: "true", REMINDER_DRY_RUN: "false", REMINDER_SEND_MODE: "test", REMINDER_TEST_USER_IDS: "alice,bob", REMINDER_BATCH_SIZE: "50", REMINDER_INACTIVITY_DAYS: "4", REMINDER_MAX_ATTEMPTS: "3" });
   for (const name of collections) for (const doc of (await db.collection(name).get()).docs) await db.recursiveDelete(doc.ref);
 });
 afterAll(async () => {
@@ -33,6 +33,20 @@ async function seed(uid = "alice", enabled = true, days = 5) {
   await db.collection("userActivity").doc(uid).set({ userId: uid, cycleId: "cycle-1", lastActiveAt: Timestamp.fromMillis(clock - days * DAY) });
 }
 const job = (extra: Parameters<typeof runInactivityReminderJob>[0] = {}) => runInactivityReminderJob({ db, now: () => clock, account: async () => ({ email: message.to[0] }), pause: async () => {}, ...extra });
+
+// Compara también updateTime: detecta escrituras aunque vuelvan a guardar los mismos datos.
+async function userRecords(uid: string) {
+  const owned = await Promise.all(["emailReminders", "unsubscribeTokens", "notificationAudit"].map(name => db.collection(name).where("userId", "==", uid).get()));
+  const roots = [db.doc("profiles/" + uid), db.doc("userActivity/" + uid), ...owned.flatMap(snapshot => snapshot.docs.map(doc => doc.ref))];
+  const records: { path: string; data: unknown; updateTime: unknown }[] = [];
+  async function collect(ref: typeof roots[number]) {
+    const snapshot = await ref.get();
+    records.push({ path: ref.path, data: snapshot.data() ?? null, updateTime: snapshot.updateTime ?? null });
+    for (const collection of await ref.listCollections()) for (const doc of (await collection.get()).docs) await collect(doc.ref);
+  }
+  for (const ref of roots) await collect(ref);
+  return records.sort((a, b) => a.path.localeCompare(b.path));
+}
 
 test("el consentimiento conserva fechas y deja una auditoría; solo cambia el perfil indicado", async () => {
   await seed("alice", false); await seed("bob", false);
@@ -61,11 +75,94 @@ test("modo seco valida consentimiento, actividad y roles sin escribir ni invocar
 });
 test("test exige lista explícita; la lista filtra destinatarios y no redirige información de terceros", async () => {
   await seed(); await seed("bob"); process.env.REMINDER_TEST_USER_IDS = "";
+  const before = await Promise.all([userRecords("alice"), userRecords("bob")]);
   await expect(job()).rejects.toThrow("REMINDER_TEST_USER_IDS");
+  expect(await Promise.all([userRecords("alice"), userRecords("bob")])).toEqual(before);
+  expect((await db.collection("notificationJobs").get()).empty).toBe(true);
   process.env.REMINDER_TEST_USER_IDS = "alice"; let recipients: string[] = [];
   const report = await job({ send: async (frozen, _key, uid) => { recipients = frozen.to; expect(uid).toBe("alice"); return { status: "accepted", providerMessageId: "id" }; } });
   expect(report.accepted).toBe(1); expect(recipients).toEqual(message.to);
   expect((await db.collection("emailReminders").get()).size).toBe(1);
+});
+test("test filtra candidatos antes de reparar o crear actividad de usuarios excluidos", async () => {
+  await seed(); await seed("bob"); await seed("carol");
+  await db.doc("profiles/alice/interactions/latest").set({ eventType: "VIEW_DASHBOARD", timestamp: Timestamp.fromMillis(clock - 4.5 * DAY) });
+  await db.doc("profiles/bob/interactions/latest").set({ eventType: "LOGIN", timestamp: Timestamp.fromMillis(clock - 60_000) });
+  await db.doc("userActivity/carol").delete();
+  await db.doc("profiles/carol/interactions/latest").set({ eventType: "LOGIN", timestamp: Timestamp.fromMillis(clock - 5 * DAY) });
+  process.env.REMINDER_TEST_USER_IDS = "alice";
+  const before = await Promise.all([userRecords("bob"), userRecords("carol")]);
+  const lookedUp: string[] = []; const sent: string[] = [];
+  const report = await job({ account: async uid => { lookedUp.push(uid); return { email: message.to[0] }; }, send: async (_message, _key, uid) => { sent.push(uid); return { status: "accepted", providerMessageId: "alice-only" }; } });
+  expect(report.accepted).toBe(1); expect(lookedUp).toEqual(["alice"]); expect(sent).toEqual(["alice"]);
+  expect((await db.doc("userActivity/alice").get()).data()!.lastActiveAt.toMillis()).toBe(clock - 4.5 * DAY);
+  expect(await Promise.all([userRecords("bob"), userRecords("carol")])).toEqual(before);
+});
+test("test recupera solo el UID permitido sin cancelar, renovar leases ni modificar intentos ajenos", async () => {
+  for (const uid of ["alice", "bob", "carol", "dave", "erin"]) await seed(uid);
+  const alice = (await claimReminder(db, "alice", "cycle-1", message, clock - 20 * 60_000))!;
+  await finishReminder(db, alice, { status: "uncertain", code: "timeout", message: "Prueba local" }, clock - 16 * 60_000);
+  await claimReminder(db, "bob", "cycle-1", message, clock - 6 * 60_000);
+  await db.doc("profiles/bob").update({ "emailNotifications.enabled": false });
+  await claimReminder(db, "carol", "cycle-1", message, clock - 6 * 60_000);
+  await db.doc("profiles/carol/interactions/return").set({ eventType: "LOGIN", timestamp: Timestamp.fromMillis(clock - 60_000) });
+  await claimReminder(db, "dave", "cycle-1", message, clock - DAY);
+  await claimReminder(db, "erin", "cycle-1", message, clock); // Lease ajeno todavía vigente.
+  const excluded = ["bob", "carol", "dave", "erin"];
+  const before = await Promise.all(excluded.map(userRecords));
+  process.env.REMINDER_TEST_USER_IDS = "alice";
+  const sent: string[] = [];
+  const report = await job({ send: async (frozen, key, uid) => {
+    sent.push(uid); expect(frozen).toEqual(message); expect(key).toBe(alice.record.idempotencyKey);
+    return { status: "accepted", providerMessageId: "recovered-alice" };
+  } });
+  expect(report.accepted).toBe(1); expect(sent).toEqual(["alice"]);
+  expect((await db.doc(`emailReminders/${alice.id}`).get()).data()!.attemptCount).toBe(2);
+  expect(await Promise.all(excluded.map(userRecords))).toEqual(before);
+});
+test("dry run limitado a un UID no escribe datos ni consulta Auth o el proveedor", async () => {
+  await seed(); await seed("bob");
+  await db.doc("profiles/bob/interactions/return").set({ eventType: "LOGIN", timestamp: Timestamp.fromMillis(clock - 60_000) });
+  process.env.REMINDER_ENABLED = "false"; process.env.REMINDER_DRY_RUN = "true"; process.env.REMINDER_TEST_USER_IDS = "alice";
+  const before = await Promise.all([userRecords("alice"), userRecords("bob")]); let calls = 0;
+  const report = await job({ account: async () => { calls++; throw Error("No Auth en dry run"); }, send: async () => { calls++; throw Error("No proveedor en dry run"); } });
+  expect(report.disabled).toBe(true); expect(report.dryRun).toBe(true); expect(report.candidates).toBe(1); expect(report.accepted).toBe(0); expect(calls).toBe(0);
+  expect(await Promise.all([userRecords("alice"), userRecords("bob")])).toEqual(before);
+  for (const name of ["emailReminders", "unsubscribeTokens", "notificationJobs"]) expect((await db.collection(name).get()).empty).toBe(true);
+});
+test("el filtro conserva las 96 horas desde actividad y consentimiento, así como la exclusión de administradores", async () => {
+  await seed("alice", true, 4); process.env.REMINDER_DRY_RUN = "true"; process.env.REMINDER_TEST_USER_IDS = "alice";
+  await db.doc("profiles/alice").update({ "emailNotifications.consentedAt": Timestamp.fromMillis(clock - 4 * DAY + 1) });
+  expect((await job()).candidates).toBe(0); // Consentimiento aún demasiado reciente.
+  await db.doc("profiles/alice").update({ "emailNotifications.consentedAt": Timestamp.fromMillis(clock - 4 * DAY) });
+  expect((await job()).candidates).toBe(1); // Justo 96 horas en ambas fechas.
+  await db.doc("userActivity/alice").update({ lastActiveAt: Timestamp.fromMillis(clock - 4 * DAY + 1) });
+  expect((await job()).candidates).toBe(0); // La última actividad todavía no cumple el umbral.
+  await db.doc("userActivity/alice").update({ lastActiveAt: Timestamp.fromMillis(clock - 4 * DAY) });
+  await db.doc("profiles/alice").update({ "emailNotifications.enabled": false });
+  expect((await job()).candidates).toBe(0);
+  await db.doc("profiles/alice").update({ "emailNotifications.enabled": true, "emailNotifications.consentedAt": null });
+  expect((await job()).candidates).toBe(0); // enabled=true no sustituye una fecha de consentimiento.
+  await db.doc("profiles/alice").update({ "emailNotifications.consentedAt": Timestamp.fromMillis(clock - 4 * DAY), role: "admin" });
+  expect((await job()).candidates).toBe(0);
+});
+test("general sin lista conserva reparación de actividad, recuperación y envío de todos los elegibles", async () => {
+  await seed(); await seed("bob");
+  const bob = (await claimReminder(db, "bob", "cycle-1", message, clock - 20 * 60_000))!;
+  await finishReminder(db, bob, { status: "uncertain", code: "timeout", message: "Prueba local" }, clock - 16 * 60_000);
+  await db.doc("profiles/bob/interactions/latest").set({ eventType: "VIEW_REGULATION", timestamp: Timestamp.fromMillis(clock - 4.5 * DAY) });
+  process.env.REMINDER_SEND_MODE = "general"; process.env.REMINDER_TEST_USER_IDS = "";
+  const sent: string[] = [];
+  const report = await job({ send: async (_message, _key, uid) => { sent.push(uid); return { status: "accepted", providerMessageId: "general-" + uid }; } });
+  expect(report.accepted).toBe(2); expect(sent.sort()).toEqual(["alice", "bob"]);
+  expect((await db.doc("userActivity/bob").get()).data()!.lastActiveAt.toMillis()).toBe(clock - 4.5 * DAY);
+  expect((await db.doc(`emailReminders/${bob.id}`).get()).data()!.attemptCount).toBe(2);
+});
+test("general conserva la restricción opcional de una lista de UIDs no vacía", async () => {
+  await seed(); await seed("bob"); process.env.REMINDER_SEND_MODE = "general"; process.env.REMINDER_TEST_USER_IDS = "alice";
+  const sent: string[] = [];
+  const report = await job({ send: async (_message, _key, uid) => { sent.push(uid); return { status: "accepted", providerMessageId: "restricted-general" }; } });
+  expect(report.accepted).toBe(1); expect(sent).toEqual(["alice"]);
 });
 test("dos procesos solo obtienen un claim y una aceptación; no se duplica al ejecutar otra vez", async () => {
   await seed();

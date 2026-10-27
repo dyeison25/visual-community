@@ -111,6 +111,9 @@ export async function runInactivityReminderJob(dependencies: Dependencies = {}):
         report.scanned++;
         const existing = kind === "recovery" ? doc.data() as ReminderRecord : undefined;
         const uid = existing?.userId || doc.id;
+        // La lista limita también las escrituras: filtrar antes de reparar actividad o reclamar recuperaciones.
+        // Conserva la restricción opcional que ya existía cuando general recibe una lista no vacía.
+        if (settings.testUserIds.size && !settings.testUserIds.has(uid)) { report.skipped++; continue; }
         const activity = await activityForReminder(db, uid, settings.dryRun);
         const profile = kind === "candidate" ? doc.data() as UserProfile : (await db.collection("profiles").doc(uid).get()).data() as UserProfile | undefined;
         if (!eligible(profile, activity, now()) || (existing && existing.cycleId !== activity?.cycleId)) {
