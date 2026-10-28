@@ -12,14 +12,15 @@ export function createGeographyRoutes(service: GeographyService = geographyServi
     if (++entry.count > 45 || requests.size >= 2000 && !requests.has(key)) { res.setHeader("Retry-After", "60"); res.status(429).json({ message: "Has realizado muchas consultas de mapas. Espera un minuto antes de continuar." }); return; }
     requests.set(key, entry); next();
   });
-  function handler(kind: "context" | "features" | "wms") {
+  function handler(kind: "context" | "features" | "wms" | "availability") {
     return async (req: Request, res: Response) => {
       const controller = new AbortController();
       const closed = () => { if (!res.writableEnded) controller.abort(); };
       req.once("aborted", closed); res.once("close", closed);
       try {
         const input = validateGeography(req.query, kind === "wms");
-        const value = await service[kind](input, controller.signal);
+        if (kind === "availability" && Object.keys(req.query).length) throw new GeographyError(400, "El diagnóstico no admite parámetros.");
+        const value = kind === "availability" ? await service.availability(controller.signal) : await service[kind](input, controller.signal);
         if (!controller.signal.aborted) {
           if (kind === "wms") {
             const image = value as Awaited<ReturnType<GeographyService["wms"]>>;
@@ -39,6 +40,7 @@ export function createGeographyRoutes(service: GeographyService = geographyServi
     };
   }
   router.get("/context", handler("context")); router.get("/features", handler("features")); router.get("/wms", handler("wms"));
+  router.get("/availability", handler("availability"));
   return router;
 }
 export const geographyRoutes = createGeographyRoutes();

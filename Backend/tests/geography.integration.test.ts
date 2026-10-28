@@ -15,9 +15,9 @@ const base = "http://127.0.0.1:" + (server.address() as AddressInfo).port + "/ap
 const protectedServer = productionApp.listen(0, "127.0.0.1"); await once(protectedServer, "listening");
 afterAll(async () => { await Promise.all([new Promise<void>(resolve => server.close(() => resolve())), new Promise<void>(resolve => protectedServer.close(() => resolve()))]); });
 
-test("integración geográfica: las tres rutas reales requieren sesión", async () => {
+test("integración geográfica: las rutas de datos y diagnóstico requieren sesión", async () => {
   const root = "http://127.0.0.1:" + (protectedServer.address() as AddressInfo).port;
-  for (const path of ["context", "features", "wms"]) expect((await fetch(root + "/api/geography/" + path + "?q=solar")).status).toBe(401);
+  for (const path of ["context", "features", "wms", "availability"]) expect((await fetch(root + "/api/geography/" + path + "?q=solar")).status).toBe(401);
 });
 test("integración geográfica: interpreta, filtra y devuelve solo el contrato público", async () => {
   const params = new URLSearchParams({ q: "Proyectos solares en Medellín" });
@@ -56,6 +56,24 @@ test("integración geográfica: falla de proveedor termina en mensaje comprensib
     const response = await fetch("http://127.0.0.1:" + (errorServer.address() as AddressInfo).port + "/context?q=Comunidades");
     expect(response.status).toBe(503); const body = await response.text(); expect(body).toContain("temporalmente"); expect(body).not.toMatch(/credential|stack|private/);
   } finally { await new Promise<void>(resolve => errorServer.close(() => resolve())); }
+});
+
+test("diagnóstico de disponibilidad consulta solo dos metadatos cerrados y no expone fallos privados", async () => {
+  const calls: string[] = [];
+  const diagnostic = express(); diagnostic.use(createGeographyRoutes(createGeographyService({ fetcher: async url => {
+    calls.push(String(url));
+    if (String(url).includes("dane.gov.co")) throw Error("private-upstream-failure");
+    return Response.json({ currentVersion: 11 });
+  } })));
+  const diagnosticServer = diagnostic.listen(0, "127.0.0.1"); await once(diagnosticServer, "listening");
+  try {
+    const url = "http://127.0.0.1:" + (diagnosticServer.address() as AddressInfo).port + "/availability";
+    const response = await fetch(url); const body = await response.json();
+    expect(body.sources).toEqual([{ source: "DANE", available: false, diagnostic: { source: "DANE", reason: "network" } }, { source: "UPME", available: true }]);
+    expect(calls).toHaveLength(2); expect(calls.every(url => url.endsWith("?f=json") && !url.includes("/query"))).toBe(true);
+    expect(JSON.stringify(body)).not.toMatch(/private|stack|https/);
+    expect((await fetch(url + "?q=solar")).status).toBe(400); expect(calls).toHaveLength(2);
+  } finally { await new Promise<void>(resolve => diagnosticServer.close(() => resolve())); }
 });
 test("integración geográfica: cerrar el cliente cancela la consulta oficial", async () => {
   let started!: () => void; let stopped!: () => void;

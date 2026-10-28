@@ -1,6 +1,6 @@
 import type { GeographyInput, GeoBounds, MapContext, MapData, MapFeature, MapGeometry, MapLegendEntry } from "../../../../shared/geography";
 import type { Fetcher } from "../external/http";
-import { layers, permittedFields, publicLayer, UPME_REST, type LayerDefinition } from "./catalog";
+import { layers, permittedFields, publicLayer, UPME_REST, DANE_BASE, type LayerDefinition } from "./catalog";
 import { createGeoHttp, GeographyError } from "./http";
 import { mapIntent, normalize } from "./intent";
 import { gazetteer, placeBounds, resolvePlace } from "./places";
@@ -147,6 +147,13 @@ export function createGeographyService(options: { fetcher?: Fetcher; now?: () =>
     return result;
   }
   return {
+    async availability(signal?: AbortSignal) {
+      const sources = await Promise.all(([ ["DANE", DANE_BASE], ["UPME", UPME_REST + layers.communities.path] ] as const).map(async ([source, url]) => {
+        try { await http.json(url + "?f=json", signal, 300000); return { source, available: true }; }
+        catch (error) { return { source, available: false, ...(error instanceof GeographyError && error.diagnostic ? { diagnostic: error.diagnostic } : {}) }; }
+      }));
+      return { sources, checkedAt: new Date(now()).toISOString() };
+    },
     context: async (input: GeographyInput, signal?: AbortSignal) => (await prepare(input, signal)).context,
     features,
     async wms(input: GeographyInput, signal?: AbortSignal) {
