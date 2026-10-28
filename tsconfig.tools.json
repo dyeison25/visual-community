@@ -6,6 +6,8 @@
     "Backend/tests/gmail-smtp.test.ts",
     "Backend/tests/reminder-workflow.test.ts",
     "Backend/tests/reminder-credentials.test.ts",
+    "Backend/tests/geography.test.ts",
+    "Backend/tests/geography.integration.test.ts",
     "tests/notifications.integration.test.ts",
     "scripts/verify-built-api.ts",
     "playwright.production.config.ts",

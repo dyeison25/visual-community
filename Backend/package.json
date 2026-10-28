@@ -6,9 +6,10 @@
     "scripts": {
         "dev": "bun --watch index.ts",
         "typecheck": "tsc --noEmit",
-        "build": "bun run typecheck && bun build index.ts --target bun --packages external --outfile dist/index.js && bun build src/jobs/send-inactivity-reminders.ts --target bun --packages external --outfile dist/send-inactivity-reminders.js",
+        "build": "bun run typecheck && bun build index.ts --target bun --packages external --outfile dist/index.js && bun build src/jobs/send-inactivity-reminders.ts --target bun --packages external --outfile dist/send-inactivity-reminders.js && bun build src/jobs/verify-geography.ts --target bun --packages external --outfile dist/verify-geography.js",
         "start": "bun dist/index.js",
         "verify:integrations": "bun scripts/verify-integrations.ts",
+        "verify:geography": "bun src/jobs/verify-geography.ts",
         "reminders": "bun dist/send-inactivity-reminders.js"
     },
     "devDependencies": {

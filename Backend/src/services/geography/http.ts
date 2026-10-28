@@ -1,0 +1,76 @@
+import type { Fetcher } from "../external/http";
+export class GeographyError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+const unavailable = () => new GeographyError(503, "La información geográfica oficial no está disponible temporalmente. Los resultados de búsqueda siguen disponibles.");
+/** Caché pública efímera y acotada. Las cancelaciones no conservan respuestas incompletas. */
+export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutMs = 12000) {
+  const cache = new Map<string, { expires: number; bytes: Uint8Array; type: string }>();
+  let cachedBytes = 0; let active = 0;
+  const waiting: (() => void)[] = [];
+  async function acquire(signal: AbortSignal) {
+    signal.throwIfAborted();
+    if (active < 3) { active++; return; }
+    if (waiting.length >= 12) throw new GeographyError(503, "El servicio de mapas está ocupado. Intenta nuevamente en un momento.");
+    await new Promise<void>((resolve, reject) => {
+      const ready = () => { signal.removeEventListener("abort", abort); resolve(); };
+      const abort = () => { const index = waiting.indexOf(ready); if (index >= 0) waiting.splice(index, 1); reject(signal.reason); };
+      waiting.push(ready); signal.addEventListener("abort", abort, { once: true });
+    });
+    if (signal.aborted) { release(); signal.throwIfAborted(); }
+  }
+  function release() { const next = waiting.shift(); if (next) next(); else active--; }
+  async function request(url: string, signal?: AbortSignal, ttl = 300000, image = false) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port
+      || !["geo.upme.gov.co", "geoportal.dane.gov.co"].includes(parsed.hostname)
+      || !/^\/(server\/(rest\/)?services\/|mparcgis\/rest\/services\/MGN2025\/)/.test(parsed.pathname)) throw new GeographyError(400, "Fuente geográfica no permitida.");
+    signal?.throwIfAborted();
+    const key = (image ? "image:" : "json:") + url; const cached = cache.get(key);
+    if (cached && cached.expires > now()) return cached;
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new DOMException("Geographic deadline", "TimeoutError")), image ? Math.max(timeoutMs, 20000) : timeoutMs);
+    const combined = AbortSignal.any([...(signal ? [signal] : []), deadline.signal]);
+    try { await acquire(combined); } catch (error) { clearTimeout(timer); if (signal?.aborted) throw signal.reason; throw error instanceof GeographyError ? error : unavailable(); }
+    try {
+      const response = await fetcher(url, { signal: combined, redirect: "error", headers: { Accept: image ? "image/png" : "application/json" } });
+      const type = response.headers.get("content-type") || "";
+      if (!response.ok || !(image ? type.startsWith("image/png") : type.includes("json"))) { await response.body?.cancel().catch(() => {}); throw unavailable(); }
+      const max = image ? 1_200_000 : 4_000_000;
+      const tooLarge = () => new GeographyError(413, "El área devuelve demasiada información geográfica. Acerca el mapa o selecciona un territorio menor.");
+      if (Number(response.headers.get("content-length")) > max) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
+      const reader = response.body?.getReader(); if (!reader) throw unavailable();
+      const chunks: Uint8Array[] = []; let size = 0;
+      try {
+        while (true) { combined.throwIfAborted(); const part = await reader.read(); if (part.done) break;
+          size += part.value.byteLength; if (size > max) throw tooLarge(); chunks.push(part.value);
+        }
+      } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+      const bytes = new Uint8Array(size); let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      if (image && ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte)) throw unavailable();
+      combined.throwIfAborted();
+      const value = { expires: now() + ttl, bytes, type };
+      const previous = cache.get(key); if (previous) { cachedBytes -= previous.bytes.length; cache.delete(key); }
+      while (cache.size && (cache.size >= 64 || cachedBytes + size > 12_000_000)) {
+        const oldest = cache.keys().next().value!; cachedBytes -= cache.get(oldest)!.bytes.length; cache.delete(oldest);
+      }
+      cache.set(key, value); cachedBytes += size; return value;
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      if (error instanceof GeographyError) throw error;
+      throw unavailable();
+    } finally { clearTimeout(timer); release(); }
+  }
+  return {
+    async json(url: string, signal?: AbortSignal, ttl?: number): Promise<Record<string, any>> {
+      const result = await request(url, signal, ttl);
+      try { const data: unknown = JSON.parse(new TextDecoder().decode(result.bytes));
+        if (!data || typeof data !== "object" || Array.isArray(data) || "error" in data) throw unavailable();
+        return data as Record<string, any>;
+      } catch { const key = "json:" + url; const old = cache.get(key); if (old) { cachedBytes -= old.bytes.length; cache.delete(key); } throw unavailable(); }
+    },
+    async image(url: string, signal?: AbortSignal) { return (await request(url, signal, 60000, true)).bytes; },
+  };
+}
+export type GeoHttp = ReturnType<typeof createGeoHttp>;

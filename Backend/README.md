@@ -4,6 +4,8 @@ API Express 5 ejecutada con Bun. Conserva rutas, controladores, servicios separa
 
 Firebase Admin valida los ID tokens de Firebase Authentication. Registro y login suceden en el frontend mediante Firebase; las antiguas rutas POST responden 410. Las rutas administrativas comprueban el rol antes de entregar datos.
 
+Las nuevas rutas protegidas `/api/geography/context`, `/api/geography/features` y `/api/geography/wms` consultan UPME/DANE bajo demanda, con parámetros cerrados y caché temporal. No escriben perfiles ni índices. `bun run verify:geography` comprueba lecturas reales acotadas; el build incluye `dist/verify-geography.js` para ejecutar manualmente la misma comprobación desde Render después de una publicación autorizada. No inicia recordatorios. Ver [configuración, límites y pruebas de mapas contextuales](../docs/MAPAS_CONTEXTUALES.md).
+
 ## Ejecutar desde esta carpeta
 
 ```powershell

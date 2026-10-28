@@ -1,4 +1,4 @@
-import { useCallback,useEffect,useState } from "react";
+import { lazy,Suspense,useCallback,useEffect,useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { discoveryService } from "../services/discoveryService";
 import { interactionService } from "../services/interactionService";
@@ -6,6 +6,8 @@ import { useResource } from "../hooks/useResource";
 import { ContentResults } from "../components/ContentResults";
 import { PageHeading,Empty,Loading,ErrorState } from "../components/UI";
 import { TOPIC_OPTIONS, inferTopics } from "../../../shared/preferences";
+import { MapBoundary } from "../components/maps/MapBoundary";
+const ContextualEnergyMap=lazy(()=>import("../components/maps/ContextualEnergyMap"));
 export function SearchPage(){
   const [params,setParams]=useSearchParams();const query=params.get("q")||"",category=params.get("category")||"",page=Math.max(0,Number(params.get("page"))||0);
   const [draft,setDraft]=useState(query);
@@ -17,6 +19,7 @@ export function SearchPage(){
       <label htmlFor="global-query">¿Qué quieres consultar?</label><div className="search-controls"><input id="global-query" value={draft} onChange={e=>setDraft(e.target.value)} maxLength={180} placeholder="Energía solar, comunidades, demanda…"/><button className="button primary" type="submit">Buscar</button></div>
       <label htmlFor="search-topic">Filtrar por tema</label><select id="search-topic" value={category} onChange={e=>setParams({q:query,category:e.target.value})}><option value="">Todos los temas</option>{TOPIC_OPTIONS.map(t=><option value={t.id} key={t.id}>{t.label}</option>)}</select>
     </form>
+    <MapBoundary key={query+"|"+category}><Suspense fallback={<Loading label="Preparando mapa contextual…"/>}><ContextualEnergyMap query={query} category={category}/></Suspense></MapBoundary>
     {resource.loading?<Loading label="Buscando información…"/>:resource.error?<ErrorState message={resource.error} retry={resource.refresh}/>:resource.data?.hits.length?<>
       <p className="muted small discovery-note">{resource.data.total} resultados · Algolia · Tus intereses ayudan a ordenar, sin ocultar otros temas.</p>
       <ContentResults items={resource.data.hits.map(content=>({content,reason:""}))} origin="search"/>

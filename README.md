@@ -63,5 +63,6 @@ Desde Backend, bun run verify:integrations --map --gemini comprueba servicios re
 - [Fuentes oficiales](docs/FUENTES_OFICIALES.md).
 - [Gemini](docs/GEMINI.md).
 - [Recordatorios: Gmail SMTP, programación diaria y pruebas manuales en GitHub Actions](docs/NOTIFICACIONES_CORREO.md).
+- [Mapas contextuales dinámicos: capas UPME, filtros y prueba local](docs/MAPAS_CONTEXTUALES.md).
 
-Los informes anteriores se conservan como evidencia histórica. Esta versión calcula afinidad y recomendaciones; los recordatorios programados se habilitan desde GitHub Actions para usuarios consentidos con al menos 96 horas de inactividad y conservan el cupo de 20 intentos SMTP/24 horas. La configuración local y las pruebas manuales siguen en modo seguro por defecto. No hay clasificación de riesgo de abandono. La Etapa 2 (mapa contextual en búsqueda) sigue pendiente de revisión.
+Los informes anteriores se conservan como evidencia histórica. Esta versión calcula afinidad y recomendaciones; los recordatorios programados se habilitan desde GitHub Actions para usuarios consentidos con al menos 96 horas de inactividad y conservan el cupo de 20 intentos SMTP/24 horas. La configuración local y las pruebas manuales siguen en modo seguro por defecto. No hay clasificación de riesgo de abandono. Los mapas contextuales dinámicos de `/buscar` se publican mediante el backend existente de Render y Firebase Hosting; no reemplazan el mapa principal ni reindexan Algolia.
