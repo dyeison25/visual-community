@@ -41,12 +41,14 @@ Ver [producción](../docs/PRODUCCION.md), [personalización](../docs/PERSONALIZA
 
 ## Recordatorios de inactividad — Etapa 1
 
-Ver [guía completa](../docs/NOTIFICACIONES_CORREO.md). `bun run build` también compila el job. `bun run reminders` lo ejecuta desde esta carpeta; por defecto está desactivado y en simulación. No debe habilitarse para todos los usuarios sin revisar los ensayos.
+Ver [guía completa](../docs/NOTIFICACIONES_CORREO.md). `bun run build` también compila el job. `bun run reminders` lo ejecuta desde esta carpeta; los valores locales por defecto siguen desactivados y en simulación. El workflow programado establece explícitamente envío general real; iniciar el API no ejecuta el job.
 
 Nuevas rutas: `POST /api/activity` y `POST /api/notifications/consent` requieren el ID token. `POST /api/notifications/unsubscribe` es público, limitado por IP y exige token opaco más `confirm: true`; ningún GET realiza una baja. El uid del consentimiento y la actividad siempre procede de la sesión verificada.
 
 El job tiene adaptadores separados para Gmail SMTP (Nodemailer 10.2.1) y Resend. `EMAIL_PROVIDER=gmail_smtp` selecciona Gmail; si falta esta variable se conserva Resend. El API HTTP no necesita secretos de correo. Gmail se ejecuta en GitHub Actions, no en Render Free, que bloquea los puertos SMTP.
 
-El workflow `.github/workflows/inactivity-reminders.yml` es exclusivamente manual, restringido a `main`, con dry run por defecto y doble habilitación para ensayos reales. No contiene cron. Los nombres exactos de sus ocho Secrets y la protección del Environment `reminder-tests` están en la guía completa. No crear archivos `.env` ni JSON de credenciales en Actions.
+El workflow `.github/workflows/inactivity-reminders.yml` admite programación diaria `17 15 * * *` (15:17 UTC, aproximadamente 10:17 Colombia) y pruebas manuales, solo en `main`. El paso programado usa `REMINDER_ENABLED=true`, `REMINDER_DRY_RUN=false`, `REMINDER_SEND_MODE=live` y lista de UIDs vacía. `live` es un alias explícito de `general`. El paso manual conserva `test`, dry run por defecto, confirmación y lista privada para cualquier envío real. Ambos usan `reminder-tests`; para no bloquear el cron, este Environment no debe tener revisores requeridos, temporizadores ni reglas de aprobación externas. Mantener la política de rama `main` y los ocho Secrets; no crear archivos `.env` ni JSON de credenciales en Actions.
+
+Antes de acceder a Firestore en Actions se validan las credenciales requeridas. La clave Firebase acepta saltos reales o `\\n` escapados, como el inicializador actual; el secreto de notificaciones se conserva como texto estable. Los fallos previos se registran únicamente con códigos controlados. No se leen valores de Secrets a través de la API de GitHub ni se imprimen sus valores.
 
 SMTP reserva un máximo persistido de 20 transmisiones cada 24 horas, incluidos resultados inciertos. Solo reintenta rechazos confirmados: una vez al día, hasta tres intentos dentro de 72 horas. Una transmisión incierta o interrumpida después de su marca durable queda en `needs_review`, sin reenvío automático. Resend conserva su ventana de idempotencia de 23 horas. Cambiar de proveedor nunca reenvía automáticamente registros anteriores. Las pruebas usan emuladores y un servidor SMTP local sintético; no envían correos reales.

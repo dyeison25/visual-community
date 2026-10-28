@@ -1,6 +1,8 @@
-name: Recordatorios por correo (prueba manual)
+name: Recordatorios por correo
 
 on:
+  schedule:
+    - cron: '17 15 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -23,7 +25,7 @@ concurrency:
 
 jobs:
   reminders:
-    if: github.repository == 'dyeison25/visual-community' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: github.repository == 'dyeison25/visual-community' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     runs-on: ubuntu-latest
     environment: reminder-tests
     timeout-minutes: 10
@@ -42,7 +44,32 @@ jobs:
       - name: Comprobar TypeScript y compilar (sin secretos)
         working-directory: Backend
         run: bun run build
-      - name: Ejecutar ensayo protegido
+      - name: Enviar recordatorios programados a usuarios elegibles
+        if: github.event_name == 'schedule'
+        working-directory: Backend
+        run: bun run reminders
+        env:
+          NODE_ENV: production
+          EMAIL_PROVIDER: gmail_smtp
+          FRONTEND_URL: https://sistemagestionpermanencia.web.app
+          REMINDER_ENABLED: 'true'
+          REMINDER_DRY_RUN: 'false'
+          REMINDER_SEND_MODE: live
+          # Solo el schedule general ignora la lista; el secreto se conserva en la ejecución manual.
+          REMINDER_TEST_USER_IDS: ''
+          REMINDER_INACTIVITY_DAYS: '4'
+          REMINDER_MAX_ATTEMPTS: '3'
+          REMINDER_BATCH_SIZE: '50'
+          VC_REMINDER_CONFIRM_SEND: 'false'
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          NOTIFICATION_TOKEN_SECRET: ${{ secrets.NOTIFICATION_TOKEN_SECRET }}
+      - name: Ejecutar ensayo manual protegido
+        if: github.event_name == 'workflow_dispatch'
         working-directory: Backend
         run: bun run reminders
         env:

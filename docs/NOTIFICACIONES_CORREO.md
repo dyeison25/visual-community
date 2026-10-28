@@ -1,22 +1,34 @@
 # Recordatorios por correo — Etapa 1
 
-Actualización local, 28 de octubre de 2026: Gmail SMTP con Nodemailer 10.2.1 y GitHub Actions manual; Resend se conserva por compatibilidad. La Etapa 1 anterior está publicada. Esta ampliación todavía no se ha publicado ni conectado a una cuenta Gmail real. Frontend: https://sistemagestionpermanencia.web.app (Firebase Hosting). API: https://visual-community-api.onrender.com (Render). No se modifican variables de Render, datos existentes, Hosting ni reglas. No se activa un cron, no se envían correos y no se crea un servicio de pago. La Etapa 2 del mapa contextual queda fuera de alcance.
+Actualización, 28 de octubre de 2026: Gmail SMTP con Nodemailer 10.2.1 y GitHub Actions; Resend se conserva por compatibilidad. La implementación `90fab5a` está publicada y su dry run manual terminó correctamente. El propietario autorizó activar el cron y el envío general de esta revisión al publicarse en `main`. Frontend: https://sistemagestionpermanencia.web.app (Firebase Hosting). API: https://visual-community-api.onrender.com (Render). No se cambian variables de Render, consentimientos, fechas de actividad, Hosting ni reglas. No se fuerzan usuarios elegibles ni se ejecutan ensayos de envío manuales adicionales. La Etapa 2 del mapa contextual queda fuera de alcance.
 
-## Gmail SMTP y configuración manual de GitHub Actions
+## Programación automática y separación de modos
+
+El workflow programa `17 15 * * *`, todos los días a las 15:17 UTC, aproximadamente 10:17 de Colombia. El único paso habilitado por `schedule` configura `REMINDER_ENABLED=true`, `REMINDER_DRY_RUN=false`, `REMINDER_SEND_MODE=live` y `REMINDER_TEST_USER_IDS=''`. El código reconoce expresamente `live` como alias de `general`; un valor desconocido continúa siendo `test`. El alias por sí solo no borra ninguna lista: es el paso programado el que la vacía deliberadamente.
+
+Solo pueden enviarse correos a perfiles con consentimiento y fecha válidos, excluyendo administradores, tras 96 horas desde la fecha más reciente de consentimiento/actividad y siete días desde la última aceptación. Se conservan bajas, ciclos, personalización, cuota global de 20 intentos SMTP/24 h e idempotencia de la cola. Los resultados SMTP inciertos siguen requiriendo revisión sin reenvío automático.
+
+La ejecución `workflow_dispatch` utiliza un paso diferente: conserva `test`, `dry_run=true` y `confirm_send=false` como valores predeterminados. Para un ensayo real sigue exigiendo habilitación explícita mediante la variable `REMINDER_ENABLED=true`, confirmación y el secreto `REMINDER_TEST_USER_IDS`. La ejecución manual nunca admite `live`/general. El ejecutable valida de nuevo ambos eventos, repositorio original, rama `main`, proveedor Gmail, proyecto Firebase y umbral de 96 horas; rechaza PR, forks, otras ramas y emuladores.
+
+Se comprobó por API que `reminder-tests` existe, permite la rama `main`, contiene los ocho nombres de Secrets, carece de revisores requeridos/temporizadores/reglas externas y que Actions y el workflow están activos. No fue necesario cambiar sus protecciones. No se pueden recuperar valores de Secrets por API: los valores se validan al arrancar el job. Conservar esa política sin aprobaciones humanas para permitir el cron; los ensayos manuales mantienen su confirmación explícita en el workflow.
+
+La validación previa exige las tres credenciales Firebase, analiza la clave RSA con saltos reales, CRLF o `\\n` escapados y comprueba `NOTIFICATION_TOKEN_SECRET` sin decodificarlo ni transformarlo más allá del trim ya existente. Para enviar también valida cuenta Gmail, remitente y formato de contraseña de aplicación. Cualquier error termina antes de usar Firestore o SMTP, con códigos no sensibles como `firebase_private_key_invalid` o `email_configuration_invalid`. Una autenticación SMTP rechazada durante el envío detiene el lote. No se muestran claves, mensajes SMTP originales ni trazas.
+
+## Configuración de Secrets y ensayos manuales
 
 El job reutiliza consentimiento, actividad, preferencias, bajas, roles y cola. `EMAIL_PROVIDER=gmail_smtp` selecciona Gmail; la ausencia de la variable conserva Resend para no alterar despliegues anteriores. Los adaptadores están en `Backend/src/services/notifications/transports/`. No hay failover automático entre proveedores. Nodemailer incluye sus tipos y funciona con Bun en las pruebas de protocolo SMTP local; no se ha probado todavía autenticación o entregabilidad reales de Google.
 
 Gmail usa `smtp.gmail.com:465`, TLS con certificados verificados y una contraseña de aplicación de 16 caracteres. Se admite una cuenta personal `gmail.com`/`googlemail.com`; `EMAIL_FROM` debe contener esa misma dirección, opcionalmente con nombre visible. Nunca se usa la contraseña normal de Google. Se desactivan logs SMTP, acceso a archivos y URLs de contenido. Hay límites de conexión y una fecha límite total de 90 segundos, inferior al lease del envío.
 
-Pasos manuales pendientes, después de revisar y publicar el código:
+Configuración que debe mantenerse para las ejecuciones programadas y los ensayos:
 
 1. Crear o elegir una cuenta Gmail dedicada, habilitar verificación en dos pasos y comprobar que permite generar una contraseña de aplicación. Si la política de Google no lo permite, detenerse y evaluar OAuth; no bajar la seguridad de la cuenta.
-2. En GitHub → Settings → Environments, crear **`reminder-tests`**. Permitir despliegue solo desde `main`; configurar revisores requeridos y evitar autoaprobación cuando esté disponible. Configurar las credenciales como **Environment Secrets**, sin introducirlas en archivos, comandos, inputs ni mensajes de chat.
+2. En GitHub → Settings → Environments, conservar **`reminder-tests`** y permitir despliegue solo desde `main`. No añadir revisores requeridos, temporizadores ni reglas externas de aprobación: bloquearían también los envíos programados. Configurar las credenciales como **Environment Secrets**, sin introducirlas en archivos, comandos, inputs ni mensajes de chat.
 3. Añadir los ocho Secrets de la tabla. Mantener el secreto de notificaciones ya utilizado, sin rotarlo con mensajes pendientes. Las credenciales Firebase deben corresponder a `sistemagestionpermanencia` y tener solo los permisos necesarios para Firestore y lectura de cuentas de Authentication.
-4. Crear en ese Environment la variable **`REMINDER_ENABLED=false`** (su ausencia también equivale a false). El workflow usa `REMINDER_SEND_MODE=test` y los inputs `dry_run=true`, `confirm_send=false` por defecto. No añadir schedules.
+4. Para los ensayos manuales, mantener la variable **`REMINDER_ENABLED=false`** (su ausencia también equivale a false), `dry_run=true` y `confirm_send=false` por defecto. El paso programado fija sus propios valores reales y no depende de esa variable manual.
 5. Elegir una cuenta de prueba `user` con consentimiento desde la plataforma. Para ser candidata deben transcurrir 96 horas desde la fecha más reciente de consentimiento y actividad. No editar fechas de usuarios reales ni entrar a esa cuenta durante el periodo de inactividad.
 6. Solo tras autorización, ejecutar manualmente Actions → Recordatorios por correo → Run workflow en `main`, conservando `dry_run=true`. Una simulación consulta Firestore, pero no Auth, SMTP, cuotas, tokens, cursores ni escrituras del job. Con lista vacía puede contar todos los candidatos consentidos sin escribir; preferir un UID para el ensayo.
-7. Para un envío real posterior y autorizado: configurar un único UID, cambiar temporalmente la variable a `REMINDER_ENABLED=true`, elegir `dry_run=false` y `confirm_send=true`, y aprobar el Environment. Se necesitan todas esas condiciones; cualquier falta se rechaza antes de usar Firestore. Restaurar `REMINDER_ENABLED=false` al terminar. No habilitar modo general desde este workflow.
+7. Para un ensayo real posterior y autorizado: configurar un único UID, cambiar temporalmente la variable a `REMINDER_ENABLED=true`, elegir `dry_run=false` y `confirm_send=true`. Se necesitan todas esas condiciones; cualquier falta se rechaza antes de usar Firestore. Restaurar `REMINDER_ENABLED=false` al terminar. El paso manual nunca permite envío general. Esta activación no ejecuta nuevos ensayos manuales.
 
 | Environment Secret exacto | Contenido / finalidad |
 |---|---|
@@ -29,7 +41,7 @@ Pasos manuales pendientes, después de revisar y publicar el código:
 | `NOTIFICATION_TOKEN_SECRET` | Secreto estable de al menos 32 caracteres, compartido con la configuración previa del job |
 | `REMINDER_TEST_USER_IDS` | UIDs reales de prueba separados por comas; no correos ni un arreglo JSON |
 
-Los Secrets solo se inyectan en el paso que ejecuta el job. Instalación y build no los reciben. Las acciones están fijadas a SHA, checkout no persiste credenciales, las dependencias se instalan con `--ignore-scripts` y no se suben artefactos ni cachés privados. El workflow solo admite `workflow_dispatch`, el repositorio original y `refs/heads/main`; el ejecutable repite esos controles, valida el proyecto Firebase y rechaza emuladores en Actions. No admite pull requests, forks ni ramas alternativas. La aprobación del Environment requiere configuración manual en GitHub; el archivo no puede crear esa protección por sí mismo.
+Los Secrets solo se inyectan en los pasos que ejecutan el job, y solo uno de ellos puede ejecutarse por evento. Instalación y build no los reciben. Las acciones están fijadas a SHA, checkout no persiste credenciales, las dependencias se instalan con `--ignore-scripts` y no se suben artefactos ni cachés privados. El workflow solo admite `schedule` y `workflow_dispatch` del repositorio original y `refs/heads/main`; el ejecutable repite esos controles. No admite pull requests, forks ni ramas alternativas.
 
 Los valores no secretos del workflow son `EMAIL_PROVIDER=gmail_smtp`, `FRONTEND_URL=https://sistemagestionpermanencia.web.app`, `REMINDER_INACTIVITY_DAYS=4`, `REMINDER_MAX_ATTEMPTS=3` y `REMINDER_BATCH_SIZE=50`. No necesita Resend, Gemini, Algolia, claves del frontend ni acceso a Render.
 
@@ -51,19 +63,19 @@ Actions muestra únicamente contadores (`accepted`, `deferred`, `needsReview`, `
 
 El repositorio es público: los runners estándar de Actions son gratuitos. En privado, GitHub Free incluye una cuota compartida de 2.000 minutos/mes; evitar runners grandes, artefactos y almacenamiento adicional. Firestore mantiene sus cuotas y consumo del proyecto. Gmail no exige comprar un dominio, pero puede bloquear autenticación desde IPs de runners y no ofrece garantías para automatización masiva. La aplicación impone 20 intentos/24 h, por debajo de sus límites publicados; esto no impide bloqueos antispam. No hay promesa de costo cero fuera de las cuotas gratuitas.
 
-El horario solicitado para una etapa posterior es 10:17 de Colombia (15:17 UTC). **No está incluido ni activado en el workflow actual.** Con ejecución diaria, los candidatos se detectarían en la primera vuelta tras cumplir 96 horas, normalmente dentro de las siguientes 24 horas más posibles retrasos de Actions. Los schedules pueden retrasarse, omitirse o deshabilitarse por inactividad del repositorio. Cualquier activación automática requiere otra aprobación.
+El horario diario está incluido y se habilita al publicar esta revisión en `main`. Los candidatos se detectan en la primera vuelta tras cumplir 96 horas, normalmente dentro de las siguientes 24 horas más posibles retrasos de Actions. Los schedules pueden retrasarse, omitirse o deshabilitarse por inactividad del repositorio; no se garantiza la hora exacta ni la llegada al buzón.
 
 Fuentes: [Gmail y Nodemailer](https://nodemailer.com/guides/using-gmail), [contraseñas de aplicación](https://support.google.com/mail/answer/185833), [límites Gmail](https://support.google.com/mail/answer/22839), [costos de Actions](https://docs.github.com/en/billing/concepts/product-billing/github-actions), [programación de Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
 ### Validación local de la ampliación Gmail
 
-- Backend: 97 pruebas correctas, incluidas siete de Gmail/Nodemailer y dos de política/workflow.
-- Integración Firestore Emulator y reglas: 45 pruebas correctas; cubren aislamiento, consentimiento, 96 horas, bajas, recuperación, concurrencia y cuota SMTP, además de compatibilidad Resend.
+- Esta revisión pasó 102 pruebas backend y 46 de integración/reglas, incluidas validación privada, políticas schedule/manual, alias `live`, elegibilidad general y cuota bajo ese modo.
 - Empaquetado y exclusión de credenciales: tres pruebas correctas.
 - TypeScript comprueba backend, frontend, herramientas y los nuevos tests. Build de API, job y frontend correcto; revisión del bundle web sin secretos.
+- La suite completa de interfaz terminó con 26 pruebas correctas, dos omitidas por configuración del chat y dos fallidas al recibir una página de bloqueo del Ministerio en el navegador (escritorio y móvil). El detalle interno y los eventos de las cinco comunidades se comprobaron antes del fallo externo; no se alteraron esos tests ni la integración. Las cuatro pruebas de notificaciones pasaron. El bundle de producción también renderizó sin errores en escritorio y móvil.
 - El SMTP de protocolo se prueba únicamente contra `127.0.0.1`; los demás envíos usan adaptadores simulados. No se ejecuta el job contra producción, ni un dry run de producción, ni una conexión a Gmail.
 
-El emulador imprime rechazos PERMISSION_DENIED esperados y una advertencia de metadatos sin afectar las pruebas. Las pruebas de concurrencia tienen un timeout acotado para permitir el backoff transaccional del SDK, sin introducir pausas artificiales. El build de Vite requiere permisos locales de lectura fuera del sandbox; no implica despliegue. La autenticación real, la recepción al buzón y el workflow remoto quedan pendientes de autorización y configuración de Secrets/Environment.
+El emulador imprime rechazos PERMISSION_DENIED esperados y una advertencia de metadatos sin afectar las pruebas. Las pruebas de concurrencia tienen un timeout acotado para permitir el backoff transaccional del SDK, sin introducir pausas artificiales. El build de Vite requiere permisos locales de lectura fuera del sandbox; no implica despliegue. El dry run remoto fue exitoso; la entrega real se comprobará en las ejecuciones programadas naturales, sin lanzar envíos manuales adicionales.
 
 ## Uso y consentimiento
 

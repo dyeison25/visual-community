@@ -19,7 +19,8 @@ export function reminderSettings(env: NodeJS.ProcessEnv = process.env) {
     enabled: env.REMINDER_ENABLED === "true",
     // Ausencia de configuración significa simulación, incluso si se habilita el job.
     dryRun: env.REMINDER_DRY_RUN !== "false",
-    sendMode: env.REMINDER_SEND_MODE === "general" ? "general" as const : "test" as const,
+    // live es un alias explícito de general; se conserva general por compatibilidad.
+    sendMode: env.REMINDER_SEND_MODE === "general" || env.REMINDER_SEND_MODE === "live" ? "general" as const : "test" as const,
     inactivityMs: (Number.isFinite(inactivityDays) && inactivityDays >= 1 ? inactivityDays : 4) * 86_400_000,
     maxAttempts: Number.isInteger(maxAttempts) && maxAttempts >= 1 && maxAttempts <= 5 ? maxAttempts : 3,
     batchSize: Number.isInteger(batchSize) && batchSize >= 1 && batchSize <= 200 ? batchSize : 50,

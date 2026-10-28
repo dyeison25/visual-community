@@ -5,7 +5,7 @@ Actualización: 28 de octubre de 2026. El propietario confirmó estos despliegue
 - Frontend React/Vite: https://sistemagestionpermanencia.web.app — Firebase Hosting.
 - API Express/Bun: https://visual-community-api.onrender.com — Render.
 
-La Etapa 1 anterior ya está publicada, incluida la corrección de aislamiento `3dcc79e`. La ampliación Gmail SMTP/Nodemailer y GitHub Actions manual permanece local y pendiente de revisión/publicación. No se habilitaron envíos, facturación, schedules ni cambios de configuración remota durante esta ampliación.
+La Etapa 1, la corrección de aislamiento `3dcc79e` y Gmail SMTP/Actions `90fab5a` están publicados. Tras el dry run exitoso, el propietario autorizó publicar la programación diaria y los envíos generales a usuarios consentidos. La activación se realiza exclusivamente mediante el workflow en `main`, sin cambiar Render, Hosting, reglas, consentimientos o fechas de actividad.
 
 ## Publicación actual: Render y Firebase Hosting
 
@@ -17,20 +17,20 @@ Con el Dockerfile existente, el contexto de build es la raíz del repositorio, n
 
 ## Recordatorios: publicación por pasos
 
-La guía completa está en [NOTIFICACIONES_CORREO.md](NOTIFICACIONES_CORREO.md), con los ocho Secrets exactos y la protección del Environment `reminder-tests`. El workflow `.github/workflows/inactivity-reminders.yml` solo tiene `workflow_dispatch`, está restringido al repositorio original y a `main`, usa dry run por defecto y requiere una habilitación y confirmación separadas para un ensayo real. No tiene cron ni permite modo general.
+La guía completa está en [NOTIFICACIONES_CORREO.md](NOTIFICACIONES_CORREO.md). El workflow usa `reminder-tests`, la rama `main` y el cron `17 15 * * *`. El paso programado habilita `live` (alias de `general`) con envío real y sin lista de prueba. El manual mantiene `test`, dry run por defecto, lista privada y confirmación para ensayos reales. Las protecciones del Environment permiten `main` y no requieren aprobación humana ni temporizadores.
 
 1. Ejecutar `bun run typecheck`, `bun test Backend/tests`, `bun run test:notifications`, las E2E de notificaciones y `bun run build`. Las pruebas del correo usan transporte simulado exclusivamente en las pruebas.
 2. Revisar y autorizar commit/push por separado. La ampliación no requiere desplegar nuevamente reglas ni Hosting: no abre colecciones ni cambia el frontend. Render puede reconstruir el API por Auto-Deploy tras un push autorizado; no cambiar sus variables.
-3. Configurar manualmente en GitHub el Environment, revisores, rama permitida y Secrets siguiendo la guía. No crear un Cron de Render: el plan gratuito bloquea SMTP y el cron independiente es facturable. `deploy/render-reminders.yaml` queda como alternativa histórica Resend, sin aplicarse.
-4. Mantener `REMINDER_ENABLED=false`, `REMINDER_DRY_RUN=true`, `REMINDER_SEND_MODE=test`. Solo tras aprobación ejecutar un dry run manual y revisar sus contadores sin escribir datos del job.
-5. Un envío real posterior requiere cuenta consentida elegible, lista privada de UIDs, habilitación de Environment, `dry_run=false`, `confirm_send=true` y aprobación de los revisores configurados. Restaurar la desactivación al terminar.
-6. La ejecución diaria solicitada (10:17 Colombia/15:17 UTC) no está configurada. Activación automática o general requiere otra revisión explícita.
+3. Conservar el Environment, rama permitida y los ocho Secrets; no añadir aprobaciones manuales que bloqueen el cron. No crear un Cron de Render: el plan gratuito bloquea SMTP y el cron independiente es facturable. `deploy/render-reminders.yaml` queda como alternativa histórica Resend, sin aplicarse.
+4. El schedule usa `REMINDER_ENABLED=true`, `REMINDER_DRY_RUN=false`, `REMINDER_SEND_MODE=live` y lista vacía. Solo envía con consentimiento válido, 96 horas desde la fecha más reciente de consentimiento/actividad, sin administradores y conservando intervalos, bajas y cuota SMTP de 20 intentos/24 h.
+5. La configuración manual sigue desactivada y en simulación por defecto. Un ensayo real manual exige lista privada de UIDs, habilitación y confirmación; esta publicación no ejecuta ninguno.
+6. Comprobar después del push que el workflow está activo y la revisión publicada contiene el cron. Revisar posteriormente sus ejecuciones naturales y contadores, sin modificar datos para forzar elegibilidad.
 
 La nueva página pública `/notificaciones/baja` no obliga a iniciar sesión y no revoca por GET. El usuario confirma y el backend valida un token opaco, expiración y uso único. Las rutas protegidas de correo mantienen la ruta de destino tras login.
 
 ## Comprobación posterior a publicar
 
-Verificar registro, encuesta, edición de preferencias y notificaciones, recuperación de sesión y logout, administración protegida y las integraciones existentes. Revisar apertura directa de `/buscar?category=regulation` tras login y de la baja sin sesión en escritorio y móvil. Validar un ensayo de correo con una cuenta de prueba consentida, su baja y la ejecución repetida del job antes de habilitar destinatarios generales. Las pruebas locales no certifican entrega real al buzón ni una revisión todavía no desplegada.
+Verificar registro, encuesta, edición de preferencias y notificaciones, recuperación de sesión y logout, administración protegida y las integraciones existentes. Revisar apertura directa de `/buscar?category=regulation` tras login y de la baja sin sesión en escritorio y móvil. Tras la activación autorizada, revisar los contadores de las ejecuciones programadas naturales y la entrega; no lanzar ensayos reales adicionales sin autorización ni modificar actividad para provocar envíos. Las pruebas locales no certifican entrega real al buzón ni una revisión todavía no desplegada.
 
 Los informes de preproducción anteriores son históricos. El despliegue actual fue informado por el propietario; ninguna funcionalidad nueva se declara verificada en producción sin publicar y probar esa revisión.
 

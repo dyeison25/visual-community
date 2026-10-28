@@ -37,6 +37,9 @@ test("la configuración limita intentos y destinatarios de prueba", () => {
   const settings = reminderSettings({ REMINDER_MAX_ATTEMPTS: "99", REMINDER_BATCH_SIZE: "1000", REMINDER_TEST_USER_IDS: "a, b,," });
   expect(settings.maxAttempts).toBe(3); expect(settings.batchSize).toBe(50); expect([...settings.testUserIds]).toEqual(["a", "b"]);
   expect(reminderSettings({}).dryRun).toBe(true); expect(reminderSettings({}).enabled).toBe(false); expect(reminderSettings({}).sendMode).toBe("test");
+  expect(reminderSettings({ REMINDER_SEND_MODE: "live" }).sendMode).toBe("general");
+  expect(reminderSettings({ REMINDER_SEND_MODE: "general" }).sendMode).toBe("general");
+  expect(reminderSettings({ REMINDER_SEND_MODE: "liv" }).sendMode).toBe("test");
 });
 test("la copia de recuperación no guarda destinatario ni enlace en claro y detecta alteraciones", () => {
   const secret = "test-secret-".repeat(4); const envelope = sealEmail(message, secret);

@@ -332,7 +332,7 @@ test("SMTP limita rechazos temporales a tres intentos y no reabre mensajes venci
 });
 
 test("SMTP permite como máximo 20 intentos cada 24 horas incluso entre ejecuciones", async () => {
-  gmailFixture(); process.env.REMINDER_SEND_MODE = "general"; process.env.REMINDER_TEST_USER_IDS = "";
+  gmailFixture(); process.env.REMINDER_SEND_MODE = "live"; process.env.REMINDER_TEST_USER_IDS = "";
   for (let i = 0; i < 21; i++) await seed("smtp-" + String(i).padStart(2, "0"));
   let calls = 0;
   const send = async () => { calls++; return { status: "accepted" as const, messageId: "local-correlation" }; };
@@ -344,6 +344,20 @@ test("SMTP permite como máximo 20 intentos cada 24 horas incluso entre ejecucio
   clock += DAY + 1; expect((await job({ send })).accepted).toBe(1); expect(calls).toBe(21);
   expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
 }, 30000);
+
+test("live general consulta todos los elegibles y mantiene consentimiento, actividad, admins e intervalo mínimo", async () => {
+  gmailFixture(); process.env.REMINDER_SEND_MODE = "live"; process.env.REMINDER_TEST_USER_IDS = "";
+  await seed("alice"); await seed("bob"); await seed("no-consent", false); await seed("recent", true, 1); await seed("admin"); await seed("new-consent"); await seed("cooldown");
+  await db.doc("profiles/admin").update({ role: "admin" });
+  await db.doc("profiles/new-consent").update({ "emailNotifications.consentedAt": Timestamp.fromMillis(clock - DAY) });
+  await db.doc("userActivity/cooldown").update({ lastReminderAcceptedAt: Timestamp.fromMillis(clock - 6 * DAY) });
+  const excluded = ["no-consent", "recent", "admin", "new-consent", "cooldown"];
+  const before = await Promise.all(excluded.map(userRecords)); const sent: string[] = [];
+  const report = await job({ send: async (_mail, _key, uid, context) => { sent.push(uid); return { status: "accepted", messageId: context.messageId }; } });
+  expect(report.accepted).toBe(2); expect(sent.sort()).toEqual(["alice", "bob"]);
+  expect(await Promise.all(excluded.map(userRecords))).toEqual(before);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(2);
+});
 
 test("SMTP dos usuarios concurrentes compiten por el último cupo sin exceder 20", async () => {
   const mail = gmailFixture(); await seed(); await seed("bob");
