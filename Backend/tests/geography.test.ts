@@ -148,6 +148,16 @@ describe("fallos, caché, cancelación y carga", () => {
       }
     }
   });
+  test("no sigue una redirección y registra solo su estado, nunca el destino", async () => {
+    const http = createGeoHttp(async (_url, init) => {
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, { status: 302, headers: { location: "https://private-redirect.invalid/secret" } });
+    });
+    try { await http.json(url); throw Error("Se esperaba el rechazo"); } catch (error) {
+      expect((error as GeographyError).diagnostic).toEqual({ source: "UPME", reason: "http", upstreamStatus: 302 });
+      expect(JSON.stringify(error)).not.toMatch(/private|secret|location/);
+    }
+  });
   test("reutiliza respuestas válidas y no conserva errores ArcGIS", async () => {
     let calls = 0; const http = createGeoHttp(async () => Response.json(++calls === 1 ? { error: { code: 499 } } : { ok: true }));
     await expect(http.json(url)).rejects.toThrow(); expect(await http.json(url)).toEqual({ ok: true }); expect(await http.json(url)).toEqual({ ok: true }); expect(calls).toBe(2);

@@ -41,7 +41,9 @@ export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutM
     const combined = AbortSignal.any([...(signal ? [signal] : []), deadline.signal]);
     try { await acquire(combined); } catch (error) { clearTimeout(timer); if (signal?.aborted) throw signal.reason; throw error instanceof GeographyError ? error : unavailable(); }
     try {
-      const response = await fetcher(url, { signal: combined, redirect: "error", headers: { Accept: image ? "image/png" : "application/json" } });
+      // No seguir redirecciones: conservar el estado HTTP para diagnosticarlas sin
+      // confundirlas con un error de red ni consultar un destino fuera del catálogo.
+      const response = await fetcher(url, { signal: combined, redirect: "manual", headers: { Accept: image ? "image/png" : "application/json" } });
       const type = response.headers.get("content-type") || "";
       if (!response.ok || !(image ? type.startsWith("image/png") : type.includes("json"))) { await response.body?.cancel().catch(() => {}); throw unavailable({ source, reason: response.ok ? "content_type" : "http", upstreamStatus: response.status }); }
       const max = image ? 1_200_000 : 4_000_000;
