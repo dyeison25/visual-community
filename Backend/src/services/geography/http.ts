@@ -1,8 +1,8 @@
 import type { Fetcher } from "../external/http";
 export class GeographyError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly diagnostic?: { source: "UPME" | "DANE"; reason: "http" | "content_type" | "timeout" | "network" | "invalid_response"; upstreamStatus?: number }) { super(message); }
 }
-const unavailable = () => new GeographyError(503, "La información geográfica oficial no está disponible temporalmente. Los resultados de búsqueda siguen disponibles.");
+const unavailable = (diagnostic?: GeographyError["diagnostic"]) => new GeographyError(503, "La información geográfica oficial no está disponible temporalmente. Los resultados de búsqueda siguen disponibles.", diagnostic);
 /** Caché pública efímera y acotada. Las cancelaciones no conservan respuestas incompletas. */
 export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutMs = 12000) {
   const cache = new Map<string, { expires: number; bytes: Uint8Array; type: string }>();
@@ -25,6 +25,7 @@ export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutM
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port
       || !["geo.upme.gov.co", "geoportal.dane.gov.co"].includes(parsed.hostname)
       || !/^\/(server\/(rest\/)?services\/|mparcgis\/rest\/services\/MGN2025\/)/.test(parsed.pathname)) throw new GeographyError(400, "Fuente geográfica no permitida.");
+    const source = parsed.hostname === "geo.upme.gov.co" ? "UPME" as const : "DANE" as const;
     signal?.throwIfAborted();
     const key = (image ? "image:" : "json:") + url; const cached = cache.get(key);
     if (cached && cached.expires > now()) return cached;
@@ -35,7 +36,7 @@ export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutM
     try {
       const response = await fetcher(url, { signal: combined, redirect: "error", headers: { Accept: image ? "image/png" : "application/json" } });
       const type = response.headers.get("content-type") || "";
-      if (!response.ok || !(image ? type.startsWith("image/png") : type.includes("json"))) { await response.body?.cancel().catch(() => {}); throw unavailable(); }
+      if (!response.ok || !(image ? type.startsWith("image/png") : type.includes("json"))) { await response.body?.cancel().catch(() => {}); throw unavailable({ source, reason: response.ok ? "content_type" : "http", upstreamStatus: response.status }); }
       const max = image ? 1_200_000 : 4_000_000;
       const tooLarge = () => new GeographyError(413, "El área devuelve demasiada información geográfica. Acerca el mapa o selecciona un territorio menor.");
       if (Number(response.headers.get("content-length")) > max) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
@@ -59,7 +60,7 @@ export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutM
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof GeographyError) throw error;
-      throw unavailable();
+      throw unavailable({ source, reason: deadline.signal.aborted ? "timeout" : "network" });
     } finally { clearTimeout(timer); release(); }
   }
   return {
@@ -68,7 +69,7 @@ export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutM
       try { const data: unknown = JSON.parse(new TextDecoder().decode(result.bytes));
         if (!data || typeof data !== "object" || Array.isArray(data) || "error" in data) throw unavailable();
         return data as Record<string, any>;
-      } catch { const key = "json:" + url; const old = cache.get(key); if (old) { cachedBytes -= old.bytes.length; cache.delete(key); } throw unavailable(); }
+      } catch { const key = "json:" + url; const old = cache.get(key); if (old) { cachedBytes -= old.bytes.length; cache.delete(key); } throw unavailable({ source: new URL(url).hostname === "geo.upme.gov.co" ? "UPME" : "DANE", reason: "invalid_response" }); }
     },
     async image(url: string, signal?: AbortSignal) { return (await request(url, signal, 60000, true)).bytes; },
   };

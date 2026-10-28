@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { MAP_LAYERS } from "../../shared/geography";
 import { mapIntent } from "../src/services/geography/intent";
 import { validateGeography } from "../src/services/geography/validation";
-import { createGeoHttp } from "../src/services/geography/http";
+import { createGeoHttp, GeographyError } from "../src/services/geography/http";
 import { createGeographyService, metadataStyle, safeGeometry } from "../src/services/geography/geography.service";
 import { layers, permittedFields } from "../src/services/geography/catalog";
 import { resolvePlace } from "../src/services/geography/places";
@@ -131,6 +131,14 @@ describe("consultas oficiales acotadas y geometrías", () => {
 
 describe("fallos, caché, cancelación y carga", () => {
   const url = "https://geo.upme.gov.co/server/rest/services/test?f=json";
+  test("diagnóstico controlado distingue el rechazo oficial sin exponer cabeceras o cuerpos", async () => {
+    const http = createGeoHttp(async () => new Response("private-upstream-body", { status: 403, headers: { "content-type": "text/html", authorization: "private-header" } }));
+    try { await http.json(url); throw Error("Se esperaba el rechazo"); } catch (error) {
+      expect(error).toBeInstanceOf(GeographyError);
+      expect((error as GeographyError).diagnostic).toEqual({ source: "UPME", reason: "http", upstreamStatus: 403 });
+      expect(JSON.stringify(error)).not.toMatch(/private|authorization|https/);
+    }
+  });
   test("reutiliza respuestas válidas y no conserva errores ArcGIS", async () => {
     let calls = 0; const http = createGeoHttp(async () => Response.json(++calls === 1 ? { error: { code: 499 } } : { ok: true }));
     await expect(http.json(url)).rejects.toThrow(); expect(await http.json(url)).toEqual({ ok: true }); expect(await http.json(url)).toEqual({ ok: true }); expect(calls).toBe(2);

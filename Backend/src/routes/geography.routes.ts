@@ -29,7 +29,12 @@ export function createGeographyRoutes(service: GeographyService = geographyServi
           else res.json(value);
         }
       } catch (error) {
-        if (!controller.signal.aborted) res.status(error instanceof GeographyError ? error.status : 503).json({ message: error instanceof GeographyError ? error.message : "El mapa no está disponible temporalmente. Puedes seguir consultando los resultados de búsqueda." });
+        if (!controller.signal.aborted) {
+          // Solo categorías controladas y estado HTTP: nunca consultas, tokens ni errores originales.
+          const diagnostic = error instanceof GeographyError ? error.diagnostic : undefined;
+          if (diagnostic) console.warn(JSON.stringify({ service: "geography", ...diagnostic }));
+          res.status(error instanceof GeographyError ? error.status : 503).json({ message: error instanceof GeographyError ? error.message : "El mapa no está disponible temporalmente. Puedes seguir consultando los resultados de búsqueda.", ...(diagnostic ? { diagnostic } : {}) });
+        }
       } finally { req.removeListener("aborted", closed); res.removeListener("close", closed); }
     };
   }
