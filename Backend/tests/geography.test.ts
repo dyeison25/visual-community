@@ -139,6 +139,15 @@ describe("fallos, caché, cancelación y carga", () => {
       expect(JSON.stringify(error)).not.toMatch(/private|authorization|https/);
     }
   });
+  test("diagnóstico TLS conserva solo códigos conocidos y omite mensajes o códigos privados", async () => {
+    for (const code of ["UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "private-upstream-error"]) {
+      const http = createGeoHttp(async () => { throw Object.assign(Error("private-body"), { cause: { code } }); });
+      try { await http.json(url); throw Error("Se esperaba el fallo"); } catch (error) {
+        expect((error as GeographyError).diagnostic?.networkCode).toBe(code.startsWith("UNABLE") ? code : undefined);
+        expect(JSON.stringify(error)).not.toMatch(/private/);
+      }
+    }
+  });
   test("reutiliza respuestas válidas y no conserva errores ArcGIS", async () => {
     let calls = 0; const http = createGeoHttp(async () => Response.json(++calls === 1 ? { error: { code: 499 } } : { ok: true }));
     await expect(http.json(url)).rejects.toThrow(); expect(await http.json(url)).toEqual({ ok: true }); expect(await http.json(url)).toEqual({ ok: true }); expect(calls).toBe(2);

@@ -1,8 +1,15 @@
 import type { Fetcher } from "../external/http";
 export class GeographyError extends Error {
-  constructor(readonly status: number, message: string, readonly diagnostic?: { source: "UPME" | "DANE"; reason: "http" | "content_type" | "timeout" | "network" | "invalid_response"; upstreamStatus?: number }) { super(message); }
+  constructor(readonly status: number, message: string, readonly diagnostic?: { source: "UPME" | "DANE"; reason: "http" | "content_type" | "timeout" | "network" | "invalid_response"; upstreamStatus?: number; networkCode?: string }) { super(message); }
 }
 const unavailable = (diagnostic?: GeographyError["diagnostic"]) => new GeographyError(503, "La información geográfica oficial no está disponible temporalmente. Los resultados de búsqueda siguen disponibles.", diagnostic);
+function safeNetworkCode(error: unknown, depth = 0): string | undefined {
+  const allowed = new Set(["CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "ERR_TLS_CERT_ALTNAME_INVALID", "CERT_SIGNATURE_FAILURE", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ECONNRESET", "EHOSTUNREACH", "ETIMEDOUT", "ConnectionRefused", "ConnectionClosed", "FailedToOpenSocket"]);
+  if (!error || typeof error !== "object" || depth > 3) return undefined;
+  const direct = "code" in error ? error.code : undefined;
+  if (typeof direct === "string" && allowed.has(direct)) return direct;
+  return "cause" in error && error.cause !== error ? safeNetworkCode(error.cause, depth + 1) : undefined;
+}
 /** Caché pública efímera y acotada. Las cancelaciones no conservan respuestas incompletas. */
 export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutMs = 12000) {
   const cache = new Map<string, { expires: number; bytes: Uint8Array; type: string }>();
@@ -60,7 +67,8 @@ export function createGeoHttp(fetcher: Fetcher = fetch, now = Date.now, timeoutM
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof GeographyError) throw error;
-      throw unavailable({ source, reason: deadline.signal.aborted ? "timeout" : "network" });
+      const networkCode = safeNetworkCode(error);
+      throw unavailable({ source, reason: deadline.signal.aborted ? "timeout" : "network", ...(networkCode ? { networkCode } : {}) });
     } finally { clearTimeout(timer); release(); }
   }
   return {
