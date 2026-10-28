@@ -1,6 +1,69 @@
 # Recordatorios por correo — Etapa 1
 
-Implementación local para Visual Community, 27 de octubre de 2026. Frontend actual: https://sistemagestionpermanencia.web.app (Firebase Hosting). Backend actual: https://visual-community-api.onrender.com (Render). Esta entrega no crea un servicio de pago, no publica reglas y no habilita envíos generales. La Etapa 2 del mapa contextual requiere revisión posterior.
+Actualización local, 28 de octubre de 2026: Gmail SMTP con Nodemailer 10.2.1 y GitHub Actions manual; Resend se conserva por compatibilidad. La Etapa 1 anterior está publicada. Esta ampliación todavía no se ha publicado ni conectado a una cuenta Gmail real. Frontend: https://sistemagestionpermanencia.web.app (Firebase Hosting). API: https://visual-community-api.onrender.com (Render). No se modifican variables de Render, datos existentes, Hosting ni reglas. No se activa un cron, no se envían correos y no se crea un servicio de pago. La Etapa 2 del mapa contextual queda fuera de alcance.
+
+## Gmail SMTP y configuración manual de GitHub Actions
+
+El job reutiliza consentimiento, actividad, preferencias, bajas, roles y cola. `EMAIL_PROVIDER=gmail_smtp` selecciona Gmail; la ausencia de la variable conserva Resend para no alterar despliegues anteriores. Los adaptadores están en `Backend/src/services/notifications/transports/`. No hay failover automático entre proveedores. Nodemailer incluye sus tipos y funciona con Bun en las pruebas de protocolo SMTP local; no se ha probado todavía autenticación o entregabilidad reales de Google.
+
+Gmail usa `smtp.gmail.com:465`, TLS con certificados verificados y una contraseña de aplicación de 16 caracteres. Se admite una cuenta personal `gmail.com`/`googlemail.com`; `EMAIL_FROM` debe contener esa misma dirección, opcionalmente con nombre visible. Nunca se usa la contraseña normal de Google. Se desactivan logs SMTP, acceso a archivos y URLs de contenido. Hay límites de conexión y una fecha límite total de 90 segundos, inferior al lease del envío.
+
+Pasos manuales pendientes, después de revisar y publicar el código:
+
+1. Crear o elegir una cuenta Gmail dedicada, habilitar verificación en dos pasos y comprobar que permite generar una contraseña de aplicación. Si la política de Google no lo permite, detenerse y evaluar OAuth; no bajar la seguridad de la cuenta.
+2. En GitHub → Settings → Environments, crear **`reminder-tests`**. Permitir despliegue solo desde `main`; configurar revisores requeridos y evitar autoaprobación cuando esté disponible. Configurar las credenciales como **Environment Secrets**, sin introducirlas en archivos, comandos, inputs ni mensajes de chat.
+3. Añadir los ocho Secrets de la tabla. Mantener el secreto de notificaciones ya utilizado, sin rotarlo con mensajes pendientes. Las credenciales Firebase deben corresponder a `sistemagestionpermanencia` y tener solo los permisos necesarios para Firestore y lectura de cuentas de Authentication.
+4. Crear en ese Environment la variable **`REMINDER_ENABLED=false`** (su ausencia también equivale a false). El workflow usa `REMINDER_SEND_MODE=test` y los inputs `dry_run=true`, `confirm_send=false` por defecto. No añadir schedules.
+5. Elegir una cuenta de prueba `user` con consentimiento desde la plataforma. Para ser candidata deben transcurrir 96 horas desde la fecha más reciente de consentimiento y actividad. No editar fechas de usuarios reales ni entrar a esa cuenta durante el periodo de inactividad.
+6. Solo tras autorización, ejecutar manualmente Actions → Recordatorios por correo → Run workflow en `main`, conservando `dry_run=true`. Una simulación consulta Firestore, pero no Auth, SMTP, cuotas, tokens, cursores ni escrituras del job. Con lista vacía puede contar todos los candidatos consentidos sin escribir; preferir un UID para el ensayo.
+7. Para un envío real posterior y autorizado: configurar un único UID, cambiar temporalmente la variable a `REMINDER_ENABLED=true`, elegir `dry_run=false` y `confirm_send=true`, y aprobar el Environment. Se necesitan todas esas condiciones; cualquier falta se rechaza antes de usar Firestore. Restaurar `REMINDER_ENABLED=false` al terminar. No habilitar modo general desde este workflow.
+
+| Environment Secret exacto | Contenido / finalidad |
+|---|---|
+| `FIREBASE_PROJECT_ID` | `sistemagestionpermanencia` |
+| `FIREBASE_CLIENT_EMAIL` | Identidad privada del job, sin JSON en el runner |
+| `FIREBASE_PRIVATE_KEY` | Clave privada, admite saltos reales o escapados |
+| `SMTP_USER` | Dirección Gmail dedicada |
+| `SMTP_APP_PASSWORD` | Contraseña de aplicación, nunca contraseña normal |
+| `EMAIL_FROM` | La misma dirección que SMTP_USER, opcionalmente con nombre visible |
+| `NOTIFICATION_TOKEN_SECRET` | Secreto estable de al menos 32 caracteres, compartido con la configuración previa del job |
+| `REMINDER_TEST_USER_IDS` | UIDs reales de prueba separados por comas; no correos ni un arreglo JSON |
+
+Los Secrets solo se inyectan en el paso que ejecuta el job. Instalación y build no los reciben. Las acciones están fijadas a SHA, checkout no persiste credenciales, las dependencias se instalan con `--ignore-scripts` y no se suben artefactos ni cachés privados. El workflow solo admite `workflow_dispatch`, el repositorio original y `refs/heads/main`; el ejecutable repite esos controles, valida el proyecto Firebase y rechaza emuladores en Actions. No admite pull requests, forks ni ramas alternativas. La aprobación del Environment requiere configuración manual en GitHub; el archivo no puede crear esa protección por sí mismo.
+
+Los valores no secretos del workflow son `EMAIL_PROVIDER=gmail_smtp`, `FRONTEND_URL=https://sistemagestionpermanencia.web.app`, `REMINDER_INACTIVITY_DAYS=4`, `REMINDER_MAX_ATTEMPTS=3` y `REMINDER_BATCH_SIZE=50`. No necesita Resend, Gemini, Algolia, claves del frontend ni acceso a Render.
+
+### Cuota SMTP y resultados inciertos
+
+`notificationJobs/gmailSmtpUsage` conserva una lista limitada de reservas dentro de una ventana móvil de 24 horas. La transacción comprueba el lease, consentimiento, actividad, rol y destinatario, reserva como máximo **20 intentos** y escribe `dispatchStartedAt` antes de invocar Nodemailer. El cupo es global para el proyecto, se comparte entre ejecuciones manuales y usuarios y no se devuelve por errores, cancelación del proceso ni resultados inciertos. `REMINDER_BATCH_SIZE` solo controla lecturas, no el cupo.
+
+Al agotarse el cupo se difiere el recordatorio hasta la próxima liberación y se detiene el lote; esa espera no consume un intento de recuperación. El bloqueo global de 20 minutos, el lease de envío de cinco minutos y la concurrencia de Actions sin cancelación protegen las ejecuciones. El cuerpo cifrado, la fecha original y el Message-ID permanecen estables.
+
+SMTP no tiene la idempotencia de Resend. Solo una aceptación final `250` con el único destinatario confirmado produce `accepted`; un Message-ID local no prueba aceptación ni entrega al buzón. Rechazos temporales confirmados (4xx o DNS anterior a conexión) se reintentan tras 24 horas, como máximo tres intentos dentro de 72 horas. Errores de cuenta detienen el lote. Timeouts, desconexiones o respuestas incompletas pasan a `needs_review`, también cuando el proceso cae después de `dispatchStartedAt` o Gmail acepta y falla el guardado en Firestore. No se reenvían automáticamente. Un claim sin marca de transmisión puede recuperarse al expirar el lease.
+
+Esta política puede dejar sin entregar un correo si el proceso cae entre la marca y el envío; se prefiere esa revisión a duplicar mensajes. No existe una garantía de entrega exactamente una vez con SMTP. Revisar la carpeta Enviados de la cuenta Gmail y el Message-ID antes de resolver manualmente un resultado incierto; no borrar documentos para forzar un reenvío.
+
+Los registros nuevos guardan `provider` y, para SMTP, `messageId` y `dispatchStartedAt`. Documentos anteriores sin proveedor se consideran Resend. Si el proveedor configurado cambia, un envío pendiente pasa a revisión y no se convierte a Gmail. Los aceptados y el historial se conservan. No se necesita migrar usuarios ni abrir reglas de Firestore.
+
+### Resultados y costos
+
+Actions muestra únicamente contadores (`accepted`, `deferred`, `needsReview`, `failures`, `budgetLimited`, etc.). Los fallos o registros que requieren revisión hacen terminar el ejecutable con código no cero. `accepted` no certifica entrega al buzón. En un dry run no se guardan resúmenes ni estados en Firestore; revisar su salida. En ensayos reales revisar `emailReminders/{id}`, su subcolección `attempts`, `notificationJobs/inactivity` y `notificationJobs/gmailSmtpUsage` mediante herramientas administrativas. Nunca publicar cuerpos, destinatarios, tokens, errores SMTP originales ni credenciales en logs.
+
+El repositorio es público: los runners estándar de Actions son gratuitos. En privado, GitHub Free incluye una cuota compartida de 2.000 minutos/mes; evitar runners grandes, artefactos y almacenamiento adicional. Firestore mantiene sus cuotas y consumo del proyecto. Gmail no exige comprar un dominio, pero puede bloquear autenticación desde IPs de runners y no ofrece garantías para automatización masiva. La aplicación impone 20 intentos/24 h, por debajo de sus límites publicados; esto no impide bloqueos antispam. No hay promesa de costo cero fuera de las cuotas gratuitas.
+
+El horario solicitado para una etapa posterior es 10:17 de Colombia (15:17 UTC). **No está incluido ni activado en el workflow actual.** Con ejecución diaria, los candidatos se detectarían en la primera vuelta tras cumplir 96 horas, normalmente dentro de las siguientes 24 horas más posibles retrasos de Actions. Los schedules pueden retrasarse, omitirse o deshabilitarse por inactividad del repositorio. Cualquier activación automática requiere otra aprobación.
+
+Fuentes: [Gmail y Nodemailer](https://nodemailer.com/guides/using-gmail), [contraseñas de aplicación](https://support.google.com/mail/answer/185833), [límites Gmail](https://support.google.com/mail/answer/22839), [costos de Actions](https://docs.github.com/en/billing/concepts/product-billing/github-actions), [programación de Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
+### Validación local de la ampliación Gmail
+
+- Backend: 97 pruebas correctas, incluidas siete de Gmail/Nodemailer y dos de política/workflow.
+- Integración Firestore Emulator y reglas: 45 pruebas correctas; cubren aislamiento, consentimiento, 96 horas, bajas, recuperación, concurrencia y cuota SMTP, además de compatibilidad Resend.
+- Empaquetado y exclusión de credenciales: tres pruebas correctas.
+- TypeScript comprueba backend, frontend, herramientas y los nuevos tests. Build de API, job y frontend correcto; revisión del bundle web sin secretos.
+- El SMTP de protocolo se prueba únicamente contra `127.0.0.1`; los demás envíos usan adaptadores simulados. No se ejecuta el job contra producción, ni un dry run de producción, ni una conexión a Gmail.
+
+El emulador imprime rechazos PERMISSION_DENIED esperados y una advertencia de metadatos sin afectar las pruebas. Las pruebas de concurrencia tienen un timeout acotado para permitir el backoff transaccional del SDK, sin introducir pausas artificiales. El build de Vite requiere permisos locales de lectura fuera del sandbox; no implica despliegue. La autenticación real, la recepción al buzón y el workflow remoto quedan pendientes de autorización y configuración de Secrets/Environment.
 
 ## Uso y consentimiento
 
@@ -21,14 +84,14 @@ Un recordatorio es elegible tras cuatro días sin actividad, con consentimiento 
 `emailReminders/{id}` identifica de forma determinista uid+ciclo+versión del recordatorio. La existencia del documento nunca es por sí sola una razón para omitirlo. Estados:
 
 - `sending`: un worker tiene un lease de cinco minutos.
-- `accepted`: Resend devolvió un identificador. Significa aceptado por el proveedor, no entrega garantizada al buzón.
+- `accepted`: el proveedor confirmó aceptación; no garantiza entrega al buzón. Resend devuelve un identificador; SMTP confirma la respuesta final del servidor.
 - `retryable`: rechazo transitorio confirmado (por ejemplo 429); espera `nextAttemptAt`.
-- `uncertain`: timeout, red, 5xx o respuesta sin identificador; se recupera con la misma petición.
+- `uncertain`: resultado de Resend no confirmado, recuperable con la misma clave dentro de su ventana. SMTP incierto pasa directamente a revisión.
 - `failed_permanent`: rechazo definitivo del proveedor.
 - `needs_review`: resultado incierto fuera de la ventana, intentos agotados o copia que no puede verificarse.
 - `skipped`: cambió consentimiento, actividad o correo antes del envío.
 
-Se usa transacción Firestore para reclamar y un `leaseId` para impedir que un worker anterior sobrescriba el resultado de otro. Hay hasta tres intentos, con esperas de 15 y 60 minutos. El cron se recomienda cada 15 minutos, no una vez al día, para recuperar dentro de la ventana de idempotencia.
+Se usa transacción Firestore para reclamar y un `leaseId` para impedir que un worker anterior sobrescriba el resultado de otro. Resend conserva sus esperas de 15 y 60 minutos y una ventana de 23 horas; no debe recuperarse con un cron de una sola ejecución diaria. Gmail utiliza la política de 24/72 horas descrita arriba y nunca reintenta resultados inciertos.
 
 La copia exacta del cuerpo se cifra con AES-256-GCM y se guarda en `envelope`, con `payloadHash`. Incluye el destinatario original necesario para recuperar la petición. No se guardan en claro el correo ni el token de baja. Cambiar el nombre, preferencias, remitente o despliegue no altera el mensaje en un reintento. El secreto no debe rotarse mientras haya envíos pendientes; si no puede descifrarse el mensaje se detiene en `needs_review`.
 
@@ -50,7 +113,7 @@ Se combinan preferencias declaradas y categorías de hasta 50 interacciones reci
 
 Las rutas existentes verificadas son `/`, `/buscar?category=...` y `/perfil`. Se utiliza `FRONTEND_URL` como origen único. La ruta de búsqueda y sus parámetros sobreviven a la redirección al login. La baja pública usa la nueva ruta descrita arriba. Firebase Hosting ya tiene rewrite SPA; no requiere otra regla de Hosting.
 
-## Variables de Render
+## Variables de la alternativa Resend/Render (compatibilidad)
 
 | Nombre | Uso / configuración segura inicial |
 |---|---|
@@ -71,7 +134,9 @@ Las rutas existentes verificadas son `/`, `/buscar?category=...` y `/perfil`. Se
 
 El API no requiere credenciales de Resend para consentimientos o bajas: valida hashes en Firestore. El Cron no necesita Gemini/Algolia ni las variables CORS del servidor HTTP. Ambos comparten el proyecto Firestore. La clave privada no debe aparecer en Vite, Git, Docker ni logs.
 
-## Pasos manuales y orden de publicación
+## Alternativa histórica Resend/Render: no ejecutar para Gmail
+
+Los pasos de esta sección describen la entrega anterior y la opción de Cron de pago. No son necesarios para la ampliación Gmail/Actions, que no requiere volver a publicar frontend ni reglas. No importar `deploy/render-reminders.yaml` para el ensayo gratuito. Las configuraciones existentes de Render permanecen intactas.
 
 1. Crear una cuenta Resend y verificar un dominio propio mediante los registros DNS indicados por el proveedor. El dominio gratuito web.app no permite administrar el DNS necesario para un remitente propio. El remitente de prueba de Resend tiene restricciones; no usarlo para participantes generales.
 2. Crear una clave privada de envío limitada al dominio y guardarla solo en Render. Crear un secreto aleatorio de al menos 32 caracteres para el cifrado/token y conservarlo en el Cron.
@@ -98,7 +163,7 @@ Remove-Item Env:VC_E2E_GREP
 bun run build
 ```
 
-Para filtrar E2E puede usarse `$env:VC_E2E_GREP='notificaciones'; bun run test:e2e`. La suite funciona en escritorio y móvil. Solo los tests sustituyen transporte de Resend; nunca se envía correo real. Se comprueban aislamiento por uid, consentimiento, tokens expirados/usados, concurrencia, leases, mensajes congelados, reintentos, ciclos, cooldown, eventos de respaldo y navegación tras login. Las reglas se prueban con el emulador oficial. La integración real con Resend y su entregabilidad requieren remitente y aprobación de ensayo posteriores; no se consideran ya verificadas por estas pruebas.
+Para filtrar E2E puede usarse `$env:VC_E2E_GREP='notificaciones'; bun run test:e2e`. Los tests sustituyen los proveedores externos y usan un SMTP exclusivamente local; nunca se envía correo real. Las nuevas pruebas cubren reserva concurrente del último cupo, límite persistido, fallos SMTP, caídas después de iniciar transmisión, recuperación diaria, registros legacy, aislamiento y política del workflow. TypeScript también comprueba los nuevos tests mediante `tsconfig.tools.json`. La autenticación y entregabilidad reales de Gmail/Resend requieren una autorización posterior.
 
 ## Costos y límites
 
@@ -131,9 +196,9 @@ Modificados:
 - `Frontend/src/services/profileService.ts`, `interactionService.ts`, `Frontend/src/styles.css`, `Frontend/vite.config.ts`.
 - `scripts/dev.ts`, `scripts/check-client-secrets.mjs`, `scripts/verify-built-api.ts`, `package.json`, `README.md`, `docs/PRODUCCION.md`.
 
-Sin cambios en datos reales, índices Algolia, mapa existente, proveedores Gemini/MinEnergía/CREG/XM, Dockerfile o configuración Hosting. No se instalaron dependencias nuevas: el adaptador de correo usa la API REST oficial con `fetch` del backend Bun. No se modificaron archivos `.env` privados.
+La lista anterior corresponde a la entrega original de Etapa 1. La ampliación actual añade los adaptadores de transporte, `workflow-policy.ts`, el workflow manual y las pruebas SMTP/workflow; modifica configuración, tipos, cola, job, tests, ejemplos vacíos y esta documentación. Se añade únicamente Nodemailer 10.2.1 con tipos incluidos y se actualiza `Backend/bun.lock`. Sin cambios en datos reales, índices Algolia, mapa, proveedores Gemini/MinEnergía/CREG/XM, Dockerfile, Hosting ni `.env` privados.
 
-## Verificación de esta entrega
+## Evidencia histórica de la entrega original Resend
 
 - TypeScript de backend, frontend y herramientas: correcto.
 - Backend: 88 pruebas correctas, incluidos controles del transporte y modo seco.

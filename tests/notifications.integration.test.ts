@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { initializeApp, deleteApp, getFirestore, Timestamp } from "../Backend/tests/support/notifications";
 import { setEmailConsent } from "../Backend/src/services/notifications/consent.service";
 import { touchActivity } from "../Backend/src/services/notifications/activity.service";
-import { claimReminder, authorizeSend, finishReminder, reminderId } from "../Backend/src/services/notifications/outbox.service";
+import { claimReminder, authorizeSend, beginReminderDispatch, finishReminder, reminderId } from "../Backend/src/services/notifications/outbox.service";
 import { runInactivityReminderJob } from "../Backend/src/services/notifications/reminder.service";
 import { unsubscribeToken, tokenHash, unsubscribeWithToken } from "../Backend/src/services/notifications/unsubscribe.service";
 import type { FrozenEmail } from "../Backend/src/services/notifications/types";
@@ -12,7 +12,7 @@ import { openEmail } from "../Backend/src/services/notifications/envelope";
 if (process.env.FIRESTORE_EMULATOR_HOST !== "127.0.0.1:8080") throw new Error("Ejecuta test:notifications con el emulador oficial.");
 const app = initializeApp({ projectId: "demo-visual-community-notifications" }, "notifications-integration");
 const db = getFirestore(app); const DAY = 86_400_000; let clock = Date.now();
-const keys = ["REMINDER_ENABLED", "REMINDER_DRY_RUN", "REMINDER_SEND_MODE", "REMINDER_TEST_USER_IDS", "RESEND_API_KEY", "EMAIL_FROM", "NOTIFICATION_TOKEN_SECRET", "FRONTEND_URL", "REMINDER_BATCH_SIZE", "REMINDER_INACTIVITY_DAYS", "REMINDER_MAX_ATTEMPTS"];
+const keys = ["REMINDER_ENABLED", "REMINDER_DRY_RUN", "REMINDER_SEND_MODE", "REMINDER_TEST_USER_IDS", "RESEND_API_KEY", "EMAIL_FROM", "NOTIFICATION_TOKEN_SECRET", "FRONTEND_URL", "REMINDER_BATCH_SIZE", "REMINDER_INACTIVITY_DAYS", "REMINDER_MAX_ATTEMPTS", "EMAIL_PROVIDER", "SMTP_USER", "SMTP_APP_PASSWORD"];
 const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 const message: FrozenEmail = { from: "fixture@example.invalid", to: ["recipient@example.invalid"], subject: "Fixture", html: "<p>Fixture</p>", text: "Fixture", tags: [] };
 const collections = ["profiles", "userActivity", "emailReminders", "unsubscribeTokens", "notificationAudit", "notificationJobs"];
@@ -21,7 +21,7 @@ beforeAll(() => {
 });
 beforeEach(async () => {
   clock = Date.now();
-  Object.assign(process.env, { REMINDER_ENABLED: "true", REMINDER_DRY_RUN: "false", REMINDER_SEND_MODE: "test", REMINDER_TEST_USER_IDS: "alice,bob", REMINDER_BATCH_SIZE: "50", REMINDER_INACTIVITY_DAYS: "4", REMINDER_MAX_ATTEMPTS: "3" });
+  Object.assign(process.env, { REMINDER_ENABLED: "true", REMINDER_DRY_RUN: "false", REMINDER_SEND_MODE: "test", REMINDER_TEST_USER_IDS: "alice,bob", REMINDER_BATCH_SIZE: "50", REMINDER_INACTIVITY_DAYS: "4", REMINDER_MAX_ATTEMPTS: "3", EMAIL_PROVIDER: "resend", EMAIL_FROM: message.from, NOTIFICATION_TOKEN_SECRET: "notification-fixture-secret-".repeat(2) });
   for (const name of collections) for (const doc of (await db.collection(name).get()).docs) await db.recursiveDelete(doc.ref);
 });
 afterAll(async () => {
@@ -241,4 +241,166 @@ test("paginación avanza más allá de usuarios ya notificados y conserva el men
   const bob = (await db.doc(`emailReminders/${reminderId("bob", "cycle-1")}`).get()).data()!;
   expect(JSON.stringify(bob.envelope)).not.toContain(message.to[0]!);
   expect(openEmail(bob.envelope).to[0]).toBe(message.to[0]);
+});
+
+function gmailFixture() {
+  // Cuenta, contraseña y transporte sintéticos. Ninguna prueba se conecta a Gmail.
+  Object.assign(process.env, { EMAIL_PROVIDER: "gmail_smtp", SMTP_USER: "fixture@gmail.com", SMTP_APP_PASSWORD: "abcdefghijklmnop", EMAIL_FROM: "Visual Community <fixture@gmail.com>" });
+  return { ...message, from: process.env.EMAIL_FROM! };
+}
+
+test("SMTP dry run y UID permitido conservan aislamiento sin reservar cuota ni abrir transporte", async () => {
+  gmailFixture(); await seed(); await seed("bob");
+  await db.doc("profiles/bob/interactions/recent").set({ timestamp: Timestamp.fromMillis(clock - 60_000), eventType: "LOGIN" });
+  const before = await Promise.all([userRecords("alice"), userRecords("bob")]);
+  process.env.REMINDER_DRY_RUN = "true"; process.env.REMINDER_ENABLED = "false"; process.env.REMINDER_TEST_USER_IDS = "alice";
+  let calls = 0;
+  const report = await job({ send: async () => { calls++; throw Error("No SMTP"); }, account: async () => { calls++; throw Error("No Auth"); } });
+  expect(report.candidates).toBe(1); expect(report.accepted).toBe(0); expect(calls).toBe(0);
+  expect(await Promise.all([userRecords("alice"), userRecords("bob")])).toEqual(before);
+  expect((await db.collection("notificationJobs").get()).empty).toBe(true);
+  expect((await db.collection("emailReminders").get()).empty).toBe(true);
+});
+
+test("SMTP reserva una sola transmisión por lease incluso con llamadas concurrentes", async () => {
+  const mail = gmailFixture(); await seed();
+  const claims = await Promise.all([claimReminder(db, "alice", "cycle-1", mail, clock), claimReminder(db, "alice", "cycle-1", mail, clock)]);
+  expect(claims.filter(Boolean)).toHaveLength(1); const claim = claims.find(Boolean)!;
+  const dispatches = await Promise.all([beginReminderDispatch(db, claim, mail.to[0]!, clock), beginReminderDispatch(db, claim, mail.to[0]!, clock)]);
+  expect(dispatches.map(value => value.status).sort()).toEqual(["blocked", "ready"]);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
+}, 20000); // Dos rondas de transacciones en conflicto incluyen el backoff real del SDK.
+
+test("SMTP no recupera automáticamente una transmisión interrumpida después de reservar el cupo", async () => {
+  const mail = gmailFixture(); await seed();
+  const claim = (await claimReminder(db, "alice", "cycle-1", mail, clock))!;
+  expect((await beginReminderDispatch(db, claim, mail.to[0]!, clock)).status).toBe("ready");
+  // Equivale a aceptación SMTP seguida de caída ANTES de guardar el resultado.
+  clock += 6 * 60_000; let calls = 0;
+  const report = await job({ send: async () => { calls++; throw Error("No reenviar"); } });
+  expect(calls).toBe(0); expect(report.needsReview).toBe(1);
+  expect((await db.doc(`emailReminders/${claim.id}`).get()).data()!.status).toBe("needs_review");
+  expect((await db.doc(`emailReminders/${claim.id}`).get()).data()!.attemptCount).toBe(1);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
+});
+
+test("SMTP recupera un claim interrumpido antes de iniciar transmisión", async () => {
+  const mail = gmailFixture(); await seed();
+  const claim = (await claimReminder(db, "alice", "cycle-1", mail, clock))!; clock += 6 * 60_000;
+  let calls = 0;
+  const report = await job({ send: async (frozen, _key, uid, context) => { calls++; expect(uid).toBe("alice"); expect(frozen).toEqual(mail); expect(context.messageId).toBe(claim.record.messageId); return { status: "accepted", messageId: context.messageId }; } });
+  expect(report.accepted).toBe(1); expect(calls).toBe(1);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
+});
+
+test("SMTP incierto pasa a revisión y mantiene el consumo del cupo sin repetir llamadas", async () => {
+  gmailFixture(); await seed(); let calls = 0;
+  const send = async () => { calls++; return { status: "uncertain" as const, code: "smtp_timeout", message: "No confirmado" }; };
+  const first = await job({ send }); expect(first.needsReview).toBe(1);
+  clock += DAY + 1; await job({ send }); expect(calls).toBe(1);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
+});
+
+test("SMTP reintenta rechazo temporal al día siguiente con la misma copia y ventana de 72 horas", async () => {
+  gmailFixture(); await seed(); let calls = 0; let originalMail: FrozenEmail | undefined; let originalId: string | undefined;
+  const send: NonNullable<Parameters<typeof job>[0]>["send"] = async (mail, _key, _uid, context) => {
+    calls++;
+    if (calls === 1) { originalMail = mail; originalId = context.messageId; return { status: "retryable", code: "smtp_451", message: "Rechazo temporal confirmado" }; }
+    expect(mail).toEqual(originalMail!); expect(context.messageId).toBe(originalId!); return { status: "accepted", messageId: context.messageId };
+  };
+  expect((await job({ send })).deferred).toBe(1);
+  const ref = db.doc(`emailReminders/${reminderId("alice", "cycle-1")}`);
+  const pending = (await ref.get()).data()!;
+  expect(pending.retryDeadlineAt.toMillis() - pending.firstRequestAt.toMillis()).toBe(3 * DAY);
+  expect(pending.nextAttemptAt.toMillis()).toBe(clock + DAY);
+  await db.doc("profiles/alice").update({ name: "Nombre distinto", "preferences.topics": ["energy_communities"] });
+  clock += DAY - 1; expect((await job({ send })).accepted).toBe(0); expect(calls).toBe(1);
+  clock += 2; expect((await job({ send })).accepted).toBe(1); expect(calls).toBe(2);
+  expect((await ref.get()).data()!.attemptCount).toBe(2);
+  clock += DAY; expect((await job({ send })).accepted).toBe(0); expect(calls).toBe(2);
+});
+
+test("SMTP limita rechazos temporales a tres intentos y no reabre mensajes vencidos", async () => {
+  gmailFixture(); await seed(); let calls = 0;
+  const send = async () => { calls++; return { status: "retryable" as const, code: "smtp_451", message: "Rechazo temporal confirmado" }; };
+  await job({ send }); clock += DAY; await job({ send }); clock += DAY;
+  expect((await job({ send })).needsReview).toBe(1); clock += DAY; await job({ send }); expect(calls).toBe(3);
+  const mail = { ...message, from: process.env.EMAIL_FROM! }; await seed("bob");
+  const expired = (await claimReminder(db, "bob", "cycle-1", mail, clock))!;
+  clock += 3 * DAY + 1; await job({ send }); expect(calls).toBe(3);
+  expect((await db.doc(`emailReminders/${expired.id}`).get()).data()!.status).toBe("needs_review");
+});
+
+test("SMTP permite como máximo 20 intentos cada 24 horas incluso entre ejecuciones", async () => {
+  gmailFixture(); process.env.REMINDER_SEND_MODE = "general"; process.env.REMINDER_TEST_USER_IDS = "";
+  for (let i = 0; i < 21; i++) await seed("smtp-" + String(i).padStart(2, "0"));
+  let calls = 0;
+  const send = async () => { calls++; return { status: "accepted" as const, messageId: "local-correlation" }; };
+  const first = await job({ send }); expect(first.accepted).toBe(20); expect(first.budgetLimited).toBe(true); expect(calls).toBe(20);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(20);
+  expect((await job({ send })).accepted).toBe(0); expect(calls).toBe(20);
+  const deferred = db.doc(`emailReminders/${reminderId("smtp-20", "cycle-1")}`);
+  expect((await deferred.get()).data()!.attemptCount).toBe(0); // No consume intentos de recuperación sin transmitir.
+  clock += DAY + 1; expect((await job({ send })).accepted).toBe(1); expect(calls).toBe(21);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
+}, 30000);
+
+test("SMTP dos usuarios concurrentes compiten por el último cupo sin exceder 20", async () => {
+  const mail = gmailFixture(); await seed(); await seed("bob");
+  await db.doc("notificationJobs/gmailSmtpUsage").set({ dispatches: Array.from({ length: 19 }, () => Timestamp.fromMillis(clock - 60_000)) });
+  const alice = (await claimReminder(db, "alice", "cycle-1", mail, clock))!; const bob = (await claimReminder(db, "bob", "cycle-1", mail, clock))!;
+  const result = await Promise.all([beginReminderDispatch(db, alice, mail.to[0]!, clock), beginReminderDispatch(db, bob, mail.to[0]!, clock)]);
+  expect(result.map(value => value.status).sort()).toEqual(["budget_exhausted", "ready"]);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(20);
+}, 20000);
+
+test("SMTP un resultado incierto también ocupa el vigésimo cupo y bloquea al siguiente usuario", async () => {
+  gmailFixture(); await seed(); await seed("bob");
+  await db.doc("notificationJobs/gmailSmtpUsage").set({ dispatches: Array.from({ length: 19 }, () => Timestamp.fromMillis(clock - 60_000)) });
+  let calls = 0;
+  const send = async () => { calls++; return { status: "uncertain" as const, code: "smtp_timeout", message: "No confirmado" }; };
+  expect((await job({ send })).needsReview).toBe(1);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(20);
+  expect((await job({ send })).budgetLimited).toBe(true); expect(calls).toBe(1);
+});
+
+test("SMTP revocación, promoción a admin y dry run bloquean transmisión y reserva", async () => {
+  const mail = gmailFixture(); await seed(); await seed("bob");
+  const alice = (await claimReminder(db, "alice", "cycle-1", mail, clock))!; const bob = (await claimReminder(db, "bob", "cycle-1", mail, clock))!;
+  await setEmailConsent("alice", false, "profile", db); await db.doc("profiles/bob").update({ role: "admin" });
+  expect((await beginReminderDispatch(db, alice, mail.to[0]!, clock)).status).toBe("blocked");
+  expect((await beginReminderDispatch(db, bob, mail.to[0]!, clock)).status).toBe("blocked");
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).exists).toBe(false);
+  process.env.REMINDER_DRY_RUN = "true";
+  const before = await userRecords("alice"); expect((await beginReminderDispatch(db, alice, mail.to[0]!, clock)).status).toBe("blocked"); expect(await userRecords("alice")).toEqual(before);
+});
+
+test("SMTP detiene el lote ante error de cuenta sin probar otros destinatarios", async () => {
+  gmailFixture(); await seed(); await seed("bob"); let calls = 0;
+  const report = await job({ send: async () => { calls++; return { status: "account_error", code: "smtp_auth", message: "Revisar autenticación" }; } });
+  expect(report.failures).toBe(1); expect(calls).toBe(1);
+  expect((await db.collection("emailReminders").get()).size).toBe(1);
+  expect((await db.doc("notificationJobs/gmailSmtpUsage").get()).data()!.dispatches).toHaveLength(1);
+});
+
+test("cambiar a Gmail no reenvía un registro antiguo sin proveedor ni altera aceptados de Resend", async () => {
+  await seed(); await seed("bob");
+  const pending = (await claimReminder(db, "alice", "cycle-1", message, clock))!;
+  // Reproduce un documento legacy anterior al campo provider.
+  const legacy = { ...(await db.doc(`emailReminders/${pending.id}`).get()).data()! }; delete legacy.provider;
+  await db.doc(`emailReminders/${pending.id}`).set(legacy);
+  const accepted = (await claimReminder(db, "bob", "cycle-1", message, clock))!; await finishReminder(db, accepted, { status: "accepted", providerMessageId: "resend-fixture" }, clock);
+  const before = await userRecords("bob"); gmailFixture(); clock += 6 * 60_000; let calls = 0;
+  const report = await job({ send: async () => { calls++; throw Error("No cambiar proveedor"); } });
+  expect(calls).toBe(0); expect(report.needsReview).toBe(1); expect(await userRecords("bob")).toEqual(before);
+  expect((await db.doc(`emailReminders/${pending.id}`).get()).data()!.reason).toBe("provider_changed");
+});
+
+test("SMTP no reenvía sobres que no se pueden descifrar", async () => {
+  const mail = gmailFixture(); await seed();
+  const claim = (await claimReminder(db, "alice", "cycle-1", mail, clock))!; clock += 6 * 60_000;
+  process.env.NOTIFICATION_TOKEN_SECRET = "different-fixture-".repeat(3); let calls = 0;
+  const report = await job({ send: async () => { calls++; throw Error("No SMTP"); } });
+  expect(report.needsReview).toBe(1); expect(calls).toBe(0);
+  expect((await db.doc(`emailReminders/${claim.id}`).get()).data()!.reason).toBe("payload_or_secret_changed");
 });

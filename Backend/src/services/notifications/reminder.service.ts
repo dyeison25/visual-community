@@ -7,15 +7,15 @@ import { frontendUrl, reminderSettings, requiredEmailSettings } from "./config";
 import { sendReminderEmail, unsubscribeUrl } from "./email.service";
 import { personalizedReminder } from "./personalization.service";
 import { unsubscribeToken } from "./unsubscribe.service";
-import { authorizeSend, claimReminder, eligible, finishReminder, millis, reminderId } from "./outbox.service";
-import type { FrozenEmail, ProviderResult, ReminderRecord } from "./types";
+import { beginReminderDispatch, claimReminder, eligible, finishReminder, millis, reminderId, reminderReviewReason } from "./outbox.service";
+import type { DispatchContext, FrozenEmail, ProviderResult, ReminderRecord } from "./types";
 import { activityForReminder } from "./activity.service";
 
-type Report = { disabled: boolean; dryRun: boolean; locked: boolean; scanned: number; candidates: number; accepted: number; deferred: number; skipped: number; needsReview: number; failures: number };
+type Report = { disabled: boolean; dryRun: boolean; locked: boolean; budgetLimited: boolean; scanned: number; candidates: number; accepted: number; deferred: number; skipped: number; needsReview: number; failures: number };
 type Dependencies = {
   db?: Firestore;
   account?: (uid: string) => Promise<{ email?: string; disabled?: boolean }>;
-  send?: (message: FrozenEmail, key: string, uid: string) => Promise<ProviderResult>;
+  send?: (message: FrozenEmail, key: string, uid: string, context: DispatchContext) => Promise<ProviderResult>;
   now?: () => number;
   pause?: () => Promise<void>;
 };
@@ -24,7 +24,7 @@ const ACTIVE = ["sending", "retryable", "uncertain"];
 /** Cron independiente del navegador. Dry-run recorre los mismos candidatos sin escribir ni enviar. */
 export async function runInactivityReminderJob(dependencies: Dependencies = {}): Promise<Report> {
   const settings = reminderSettings(); const now = dependencies.now || Date.now;
-  const report: Report = { disabled: !settings.enabled, dryRun: settings.dryRun, locked: false, scanned: 0, candidates: 0, accepted: 0, deferred: 0, skipped: 0, needsReview: 0, failures: 0 };
+  const report: Report = { disabled: !settings.enabled, dryRun: settings.dryRun, locked: false, budgetLimited: false, scanned: 0, candidates: 0, accepted: 0, deferred: 0, skipped: 0, needsReview: 0, failures: 0 };
   if (!settings.enabled && !settings.dryRun) return report;
   frontendUrl(); // La URL de retorno es obligatoria y HTTPS en producción.
   if (!settings.dryRun) {
@@ -46,9 +46,10 @@ export async function runInactivityReminderJob(dependencies: Dependencies = {}):
   }
   const account = dependencies.account || (uid => getFirebaseAuth().getUser(uid));
   const send = dependencies.send || sendReminderEmail;
-  // Resend permite un límite de peticiones; el job usa menos de dos envíos por segundo.
+  // Se transmite secuencialmente. El cupo SMTP adicional se reserva en Firestore.
   const pause = dependencies.pause || (() => new Promise<void>(resolve => setTimeout(resolve, 600)));
   const seen = new Set<string>();
+  let stopped = false;
 
   async function processUser(uid: string, cycleId: string, profile: UserProfile, existing?: ReminderRecord) {
     const id = reminderId(uid, cycleId);
@@ -56,7 +57,7 @@ export async function runInactivityReminderJob(dependencies: Dependencies = {}):
     seen.add(id);
     if (settings.testUserIds.size && !settings.testUserIds.has(uid)) { report.skipped++; return; }
     if (existing && (!ACTIVE.includes(existing.status) || millis(existing.leaseUntil) > now() || millis(existing.nextAttemptAt) > now())) { report.skipped++; return; }
-    if (existing && (millis(existing.retryDeadlineAt) <= now() || existing.attemptCount >= settings.maxAttempts)) {
+    if (existing && reminderReviewReason(existing, now())) {
       report.needsReview++;
       if (!settings.dryRun) await claimReminder(db, uid, cycleId, undefined, now());
       return;
@@ -80,27 +81,36 @@ export async function runInactivityReminderJob(dependencies: Dependencies = {}):
       }
     } catch { report.failures++; return; }
     const claimed = await claimReminder(db, uid, cycleId, message, now());
-    if (!claimed) { report.skipped++; return; }
-    if (!await authorizeSend(db, claimed, email, now())) { report.skipped++; return; }
+    if (!claimed) {
+      const state = (await db.collection("emailReminders").doc(id).get()).data();
+      if (state?.status === "needs_review") report.needsReview++; else report.skipped++;
+      return;
+    }
+    const dispatch = await beginReminderDispatch(db, claimed, email, now());
+    if (dispatch.status === "budget_exhausted") { report.budgetLimited = true; report.deferred++; stopped = true; return; }
+    if (dispatch.status !== "ready") { report.skipped++; return; }
     report.candidates++;
     let result: ProviderResult;
-    try { result = await send(claimed.message, claimed.record.idempotencyKey, uid); }
+    try { result = await send(claimed.message, claimed.record.idempotencyKey, uid, dispatch.context); }
     catch { result = { status: "uncertain", code: "provider_interrupted", message: "No se confirmó el resultado del proveedor." }; }
     // Si Firestore falla después de la aceptación NO sobrescribimos el resultado con un error de envío.
-    // Se mantiene el lease; después se recupera la misma petición con la misma clave dentro de 23 h.
+    // Resend recupera con la misma clave; SMTP con transmisión iniciada pasa a revisión sin reenviar.
     try {
       await finishReminder(db, claimed, result, now());
       if (result.status === "accepted") report.accepted++;
       else if (result.status === "permanent") report.failures++;
+      else if (result.status === "account_error") { report.failures++; if (claimed.record.attemptCount >= settings.maxAttempts) report.needsReview++; stopped = true; }
+      else if (result.status === "uncertain" && claimed.record.provider === "gmail_smtp") { report.needsReview++; stopped = true; }
+      else if ((result.status === "retryable" || result.status === "uncertain") && claimed.record.attemptCount >= settings.maxAttempts) report.needsReview++;
       else report.deferred++;
-    } catch { report.failures++; }
+    } catch { report.failures++; stopped = true; }
     await pause();
   }
 
   async function scan(kind: "candidate" | "recovery") {
     const cursorField = kind === "candidate" ? "candidateCursor" : "recoveryCursor";
     let cursor = settings.dryRun ? "" : cursors[cursorField];
-    for (let page = 0; page < settings.maxPages; page++) {
+    for (let page = 0; page < settings.maxPages && !stopped; page++) {
       const base = kind === "candidate"
         ? db.collection("profiles").where("emailNotifications.enabled", "==", true)
         : db.collection("emailReminders").where("status", "in", ACTIVE);
@@ -108,6 +118,7 @@ export async function runInactivityReminderJob(dependencies: Dependencies = {}):
       if (cursor) query = query.startAfter(cursor);
       const docs = await query.get();
       for (const doc of docs.docs) {
+        if (stopped) break;
         report.scanned++;
         const existing = kind === "recovery" ? doc.data() as ReminderRecord : undefined;
         const uid = existing?.userId || doc.id;
@@ -123,6 +134,8 @@ export async function runInactivityReminderJob(dependencies: Dependencies = {}):
         const current = existing || (await db.collection("emailReminders").doc(reminderId(uid, activity!.cycleId)).get()).data() as ReminderRecord | undefined;
         await processUser(uid, activity!.cycleId, profile!, current);
       }
+      // Si se detuvo el lote, no avanzar sobre documentos que no se llegaron a procesar.
+      if (stopped) break;
       cursor = docs.size < settings.batchSize ? "" : (docs.docs.at(-1) as QueryDocumentSnapshot).id;
       if (!settings.dryRun) await stateRef.set({ [cursorField]: cursor }, { merge: true });
       if (!cursor) break;

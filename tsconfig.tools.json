@@ -3,6 +3,9 @@
   "compilerOptions": { "typeRoots": ["./Backend/node_modules/@types"], "lib": ["ESNext", "DOM", "DOM.Iterable"] },
   "include": [
     "Backend/scripts/verify-integrations.ts",
+    "Backend/tests/gmail-smtp.test.ts",
+    "Backend/tests/reminder-workflow.test.ts",
+    "tests/notifications.integration.test.ts",
     "scripts/verify-built-api.ts",
     "playwright.production.config.ts",
     "tests/production/**/*.ts"

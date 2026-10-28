@@ -1,3 +1,15 @@
+import type { EmailProvider } from "./types";
+
+export const SMTP_DAILY_ATTEMPT_LIMIT = 20;
+export const SMTP_RETRY_WINDOW_MS = 72 * 60 * 60_000;
+
+/** Ausencia de proveedor conserva el comportamiento de despliegues anteriores. */
+export function emailProvider(env: NodeJS.ProcessEnv = process.env): EmailProvider {
+  const provider = env.EMAIL_PROVIDER?.trim() || "resend";
+  if (provider !== "resend" && provider !== "gmail_smtp") throw new Error("EMAIL_PROVIDER no es válido.");
+  return provider;
+}
+
 /** Configuración leída bajo demanda: el servidor web puede funcionar con recordatorios desactivados. */
 export function reminderSettings(env: NodeJS.ProcessEnv = process.env) {
   const inactivityDays = Number(env.REMINDER_INACTIVITY_DAYS || "4");
@@ -32,11 +44,26 @@ export function notificationSecret(env: NodeJS.ProcessEnv = process.env) {
 }
 
 export function requiredEmailSettings(env: NodeJS.ProcessEnv = process.env) {
-  const apiKey = env.RESEND_API_KEY?.trim();
+  const provider = emailProvider(env);
   const from = env.EMAIL_FROM?.trim();
   const secret = notificationSecret(env);
-  if (!apiKey || !from || /[\r\n]/.test(from)) {
+  if (!from || /[\r\n]/.test(from)) {
     throw new Error("Faltan variables privadas para enviar recordatorios por correo.");
   }
-  return { apiKey, from, secret };
+  if (provider === "resend") {
+    const apiKey = env.RESEND_API_KEY?.trim();
+    if (!apiKey) throw new Error("Falta la configuración privada de Resend.");
+    return { provider, apiKey, from, secret };
+  }
+  const user = env.SMTP_USER?.trim().toLowerCase();
+  const pass = env.SMTP_APP_PASSWORD?.replace(/\s/g, "");
+  if (!user || !/^[^\s<>@]+@(gmail|googlemail)\.com$/.test(user) || !pass || !/^[a-zA-Z0-9]{16}$/.test(pass) || senderAddress(from) !== user) {
+    throw new Error("Revisa la cuenta Gmail, la contraseña de aplicación y el remitente. No uses la contraseña normal de Google.");
+  }
+  return { provider, user, pass, from, secret };
+}
+
+export function senderAddress(from: string) {
+  const match = /^(?:[^<>\r\n]+<([^<>\s]+)>|([^<>\s]+))$/.exec(from.trim());
+  return (match?.[1] || match?.[2] || "").toLowerCase();
 }

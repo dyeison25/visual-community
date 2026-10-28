@@ -1,11 +1,11 @@
 # Lanzamiento de Visual Community
 
-Actualización: 27 de octubre de 2026. El propietario confirmó estos despliegues activos:
+Actualización: 28 de octubre de 2026. El propietario confirmó estos despliegues activos:
 
 - Frontend React/Vite: https://sistemagestionpermanencia.web.app — Firebase Hosting.
 - API Express/Bun: https://visual-community-api.onrender.com — Render.
 
-Esta actualización implementa localmente recordatorios por correo. Sus cambios todavía deben publicarse y el servicio de correo/Cron debe configurarse manualmente. No se habilitaron envíos generales, facturación ni nuevas reglas remotas durante esta entrega.
+La Etapa 1 anterior ya está publicada, incluida la corrección de aislamiento `3dcc79e`. La ampliación Gmail SMTP/Nodemailer y GitHub Actions manual permanece local y pendiente de revisión/publicación. No se habilitaron envíos, facturación, schedules ni cambios de configuración remota durante esta ampliación.
 
 ## Publicación actual: Render y Firebase Hosting
 
@@ -17,14 +17,14 @@ Con el Dockerfile existente, el contexto de build es la raíz del repositorio, n
 
 ## Recordatorios: publicación por pasos
 
-La guía completa está en [NOTIFICACIONES_CORREO.md](NOTIFICACIONES_CORREO.md), con variables, costos, bajas y recuperación de resultados inciertos. La plantilla `deploy/render-reminders.yaml` crea un Cron independiente si se importa manualmente; no se aplica al servicio web existente.
+La guía completa está en [NOTIFICACIONES_CORREO.md](NOTIFICACIONES_CORREO.md), con los ocho Secrets exactos y la protección del Environment `reminder-tests`. El workflow `.github/workflows/inactivity-reminders.yml` solo tiene `workflow_dispatch`, está restringido al repositorio original y a `main`, usa dry run por defecto y requiere una habilitación y confirmación separadas para un ensayo real. No tiene cron ni permite modo general.
 
 1. Ejecutar `bun run typecheck`, `bun test Backend/tests`, `bun run test:notifications`, las E2E de notificaciones y `bun run build`. Las pruebas del correo usan transporte simulado exclusivamente en las pruebas.
-2. Publicar las reglas revisadas manualmente, conservando el proyecto actual: `bunx firebase deploy --only firestore:rules --project sistemagestionpermanencia`. Las colecciones internas de correo/actividad permanecen inaccesibles al navegador.
-3. Redesplegar el API Render actual. Confirmar `/api/health`, CORS, rutas nuevas autenticadas y rechazo de solicitudes anónimas de actividad/consentimiento.
-4. Publicar Hosting con la configuración pública actual. El script existente `deploy/frontend.ps1` recibe el origen API sin `/api` y añade el sufijo. Verificar el sitio exacto antes de ejecutarlo; no desplegar índices ni reemplazar usuarios/datos.
-5. Crear el Cron Render, cada 15 minutos (`*/15 * * * *`, UTC), con variables privadas de Firebase y correo. Mantener `REMINDER_ENABLED=false`, `REMINDER_DRY_RUN=true`, `REMINDER_SEND_MODE=test`.
-6. Ejecutar Trigger Run en modo seco y revisar contadores. Los ensayos de correo posteriores deben limitarse a `REMINDER_TEST_USER_IDS`; el envío general requiere revisión posterior explícita.
+2. Revisar y autorizar commit/push por separado. La ampliación no requiere desplegar nuevamente reglas ni Hosting: no abre colecciones ni cambia el frontend. Render puede reconstruir el API por Auto-Deploy tras un push autorizado; no cambiar sus variables.
+3. Configurar manualmente en GitHub el Environment, revisores, rama permitida y Secrets siguiendo la guía. No crear un Cron de Render: el plan gratuito bloquea SMTP y el cron independiente es facturable. `deploy/render-reminders.yaml` queda como alternativa histórica Resend, sin aplicarse.
+4. Mantener `REMINDER_ENABLED=false`, `REMINDER_DRY_RUN=true`, `REMINDER_SEND_MODE=test`. Solo tras aprobación ejecutar un dry run manual y revisar sus contadores sin escribir datos del job.
+5. Un envío real posterior requiere cuenta consentida elegible, lista privada de UIDs, habilitación de Environment, `dry_run=false`, `confirm_send=true` y aprobación de los revisores configurados. Restaurar la desactivación al terminar.
+6. La ejecución diaria solicitada (10:17 Colombia/15:17 UTC) no está configurada. Activación automática o general requiere otra revisión explícita.
 
 La nueva página pública `/notificaciones/baja` no obliga a iniciar sesión y no revoca por GET. El usuario confirma y el backend valida un token opaco, expiración y uso único. Las rutas protegidas de correo mantienen la ruta de destino tras login.
 

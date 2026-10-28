@@ -62,5 +62,6 @@ Desde Backend, bun run verify:integrations --map --gemini comprueba servicios re
 - [Personalización Algolia](docs/PERSONALIZACION_ALGOLIA.md).
 - [Fuentes oficiales](docs/FUENTES_OFICIALES.md).
 - [Gemini](docs/GEMINI.md).
+- [Recordatorios: Gmail SMTP, pruebas manuales en GitHub Actions y compatibilidad Resend](docs/NOTIFICACIONES_CORREO.md).
 
 Los informes anteriores se conservan como evidencia histórica. Esta versión calcula afinidad y recomendaciones; los recordatorios por inactividad están implementados con consentimiento explícito y permanecen desactivados por defecto. No hay clasificación de riesgo de abandono. La Etapa 2 (mapa contextual en búsqueda) sigue pendiente de revisión.
