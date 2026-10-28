@@ -1,9 +1,10 @@
 import type { GeographyInput, GeoPlace, GeoBounds } from "../../../../shared/geography";
-import { DANE_BASE } from "./catalog";
+import { DANE_BASE, UPME_TERRITORIES } from "./catalog";
 import { GeographyError, type GeoHttp } from "./http";
 import { normalize } from "./intent";
 import { validBounds } from "./validation";
-export type Gazetteer = { departments: { code: string; name: string }[]; municipalities: GeoPlace[] };
+export type Gazetteer = { departments: { code: string; name: string }[]; municipalities: GeoPlace[]; reference?: "upme-2013" };
+const temporaryBackup = new WeakMap<GeoHttp, { until: number; data: Gazetteer }>();
 /** Elimina solo menciones contenidas en otro nombre, no territorios distintos de una consulta. */
 function namedPlaces<T>(query: string, rows: T[], key: (row: T) => string, names: (row: T) => string[]): T[] {
   const text = " " + query + " ";
@@ -17,6 +18,35 @@ function namedPlaces<T>(query: string, rows: T[], key: (row: T) => string, names
 }
 const fields = "DPTO_CCDGO,MPIO_CDPMP,DPTO_CNMBRE,MPIO_CNMBRE";
 export async function gazetteer(http: GeoHttp, signal?: AbortSignal): Promise<Gazetteer> {
+  const backup = temporaryBackup.get(http);
+  if (backup && backup.until > Date.now()) return backup.data;
+  try { return await primaryGazetteer(http, signal); }
+  catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    if (!(error instanceof GeographyError) || error.status !== 503) throw error;
+    // Catálogo oficial alternativo: solo códigos y nombres, nunca polígonos completos.
+    const data = await http.json(UPME_TERRITORIES + "/0/query?" + new URLSearchParams({ f: "json", where: "MPIO_CCDGO IS NOT NULL", outFields: "DPTO_CCDGO,DPTO_CNMBR,MPIO_CCDGO,MPIO_CNMBR", returnGeometry: "false" }), signal, 900000);
+    if (!Array.isArray(data.features) || !data.features.length || data.features.length > 2000 || data.exceededTransferLimit) throw new GeographyError(503, "No pudimos verificar la referencia territorial de respaldo.");
+    const municipalities = new Map<string, GeoPlace>(); const ambiguous = new Set<string>();
+    for (const feature of data.features) {
+      const a = feature.attributes;
+      if (!a || !/^\d{2}$/.test(a.DPTO_CCDGO) || !/^\d{3}$/.test(a.MPIO_CCDGO) || typeof a.DPTO_CNMBR !== "string" || typeof a.MPIO_CNMBR !== "string" || !a.DPTO_CNMBR.trim() || !a.MPIO_CNMBR.trim()) continue;
+      // La referencia publica los componentes DIVIPOLA de 2 y 3 dígitos.
+      const code = a.DPTO_CCDGO + a.MPIO_CCDGO;
+      const place = { departmentCode: a.DPTO_CCDGO, department: a.DPTO_CNMBR.trim().toUpperCase().slice(0,100), municipalityCode: code, municipality: a.MPIO_CNMBR.trim().toUpperCase().slice(0,100) };
+      const previous = municipalities.get(code);
+      if (previous && (previous.department !== place.department || previous.municipality !== place.municipality)) ambiguous.add(code);
+      municipalities.set(code, place);
+    }
+    for (const code of ambiguous) municipalities.delete(code);
+    const rows = [...municipalities.values()];
+    if (!rows.length) throw new GeographyError(503, "La referencia territorial de respaldo no tiene códigos válidos.");
+    const departments = [...new Map(rows.map(place => [place.departmentCode, place.department])).entries()].map(([code,name]) => ({ code,name })).sort((a,b) => a.name.localeCompare(b.name,"es"));
+    const result: Gazetteer = { departments, municipalities: rows, reference: "upme-2013" };
+    temporaryBackup.set(http, { until: Date.now() + 900000, data: result }); return result;
+  }
+}
+async function primaryGazetteer(http: GeoHttp, signal?: AbortSignal): Promise<Gazetteer> {
   // Referencia administrativa ligera: solo códigos y nombres, sin geometrías ni datos de personas.
   const data = await http.json(DANE_BASE + "/317/query?" + new URLSearchParams({ f: "json", where: "MPIO_CDPMP IS NOT NULL", outFields: fields, returnGeometry: "false" }), signal, 86_400_000);
   if (!Array.isArray(data.features) || !data.features.length || data.features.length > 2000 || data.exceededTransferLimit) throw new GeographyError(503, "No pudimos verificar el catálogo territorial oficial. Intenta nuevamente.");
@@ -54,10 +84,11 @@ export function resolvePlace(input: GeographyInput, data: Gazetteer): { place: G
   const explicitUnknown = /\ben\s+(?!colombia\b|el pais\b|todo el pais\b|general\b)[a-z]/.test(q);
   return { place: null, choices: [], unresolved: explicitUnknown };
 }
-export async function placeBounds(http: GeoHttp, place: GeoPlace, signal?: AbortSignal): Promise<GeoBounds> {
-  const layer = place.municipalityCode ? "317" : "319";
-  const where = place.municipalityCode ? "MPIO_CDPMP='" + place.municipalityCode + "'" : "DPTO_CCDGO='" + place.departmentCode + "'";
-  const data = await http.json(DANE_BASE + "/" + layer + "/query?" + new URLSearchParams({ f: "json", where, returnExtentOnly: "true", outSR: "4326" }), signal, 86_400_000);
+export async function placeBounds(http: GeoHttp, place: GeoPlace, signal?: AbortSignal, reference?: Gazetteer["reference"]): Promise<GeoBounds> {
+  const historical = reference === "upme-2013";
+  const layer = historical ? place.municipalityCode ? "3" : "1" : place.municipalityCode ? "317" : "319";
+  const where = historical ? "DPTO_CCDGO='" + place.departmentCode + "'" + (place.municipalityCode ? " AND MPIO_CCDGO='" + place.municipalityCode.slice(2) + "'" : "") : place.municipalityCode ? "MPIO_CDPMP='" + place.municipalityCode + "'" : "DPTO_CCDGO='" + place.departmentCode + "'";
+  const data = await http.json((historical ? UPME_TERRITORIES : DANE_BASE) + "/" + layer + "/query?" + new URLSearchParams({ f: "json", where, returnExtentOnly: "true", outSR: "4326" }), signal, 86_400_000);
   const e = data.extent; const bbox = e ? [e.xmin, e.ymin, e.xmax, e.ymax] : null;
   if (!validBounds(bbox) || e.spatialReference?.wkid !== 4326) throw new GeographyError(503, "La fuente no devolvió un encuadre territorial verificable.");
   return bbox;

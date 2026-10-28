@@ -2,6 +2,8 @@ import type { MapLayer, MapLayerId } from "../../../../shared/geography";
 
 export const UPME_REST = "https://geo.upme.gov.co/server/rest/services/";
 export const DANE_BASE = "https://geoportal.dane.gov.co/mparcgis/rest/services/MGN2025/Serv_CapasMGN_2025/MapServer";
+/** Respaldo histórico explícito, nunca presentado como límites administrativos actuales. */
+export const UPME_TERRITORIES = UPME_REST + "SITIOSUPME/UPME_BC_Sitios_UPME_Division_Politica/MapServer";
 const viewers = "https://sig.upme.gov.co/portal/apps/experiencebuilder/experience/?id=";
 export interface LayerDefinition extends MapLayer {
   path: string; oid: string; nameField: string;

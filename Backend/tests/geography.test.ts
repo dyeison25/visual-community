@@ -4,8 +4,8 @@ import { mapIntent } from "../src/services/geography/intent";
 import { validateGeography } from "../src/services/geography/validation";
 import { createGeoHttp, GeographyError } from "../src/services/geography/http";
 import { createGeographyService, metadataStyle, safeGeometry } from "../src/services/geography/geography.service";
-import { layers, permittedFields } from "../src/services/geography/catalog";
-import { resolvePlace } from "../src/services/geography/places";
+import { layers, permittedFields, UPME_TERRITORIES } from "../src/services/geography/catalog";
+import { gazetteer, placeBounds, resolvePlace } from "../src/services/geography/places";
 import { geographicFixture, placeFixtures, featureFixture } from "./support/geography";
 
 describe("selección contextual explicable", () => {
@@ -190,5 +190,45 @@ describe("fallos, caché, cancelación y carga", () => {
     const promises = [1, 2, 3, 4].map(i => http.json(url + "&id=" + i));
     await Promise.resolve(); expect(gates).toHaveLength(3); gates.splice(0).forEach(resolve => resolve());
     await Promise.all(promises.slice(0, 3)); expect(gates).toHaveLength(1); gates[0]!(); await promises[3]; expect(max).toBe(3);
+  });
+});
+
+describe("respaldo territorial oficial identificado como histórico", () => {
+  const backupRows = [
+    { DPTO_CCDGO: "05", DPTO_CNMBR: "Antioquia", MPIO_CCDGO: "001", MPIO_CNMBR: "Medellín" },
+    { DPTO_CCDGO: "05", DPTO_CNMBR: "Antioquia", MPIO_CCDGO: "002", MPIO_CNMBR: "Nombre sintético A" },
+    { DPTO_CCDGO: "05", DPTO_CNMBR: "Antioquia", MPIO_CCDGO: "002", MPIO_CNMBR: "Nombre sintético B" },
+  ];
+  test("usa respaldo solo tras fallar DANE, no inventa códigos y omite referencias ambiguas", async () => {
+    let primary = 0; const calls: URL[] = [];
+    const http = createGeoHttp(async input => {
+      const url = new URL(input); calls.push(url);
+      if (url.hostname.includes("dane")) { primary++; throw Error("fallo de red sintético"); }
+      return Response.json({ features: backupRows.map(attributes => ({ attributes })) });
+    });
+    const data = await gazetteer(http); expect(data.reference).toBe("upme-2013");
+    expect(data.municipalities.map(place => place.municipalityCode)).toEqual(["05001"]);
+    expect(resolvePlace({ q: "Comunidades en Medellín" }, data).place?.municipalityCode).toBe("05001");
+    expect((await gazetteer(http)).reference).toBe("upme-2013"); expect(primary).toBe(1);
+    expect(calls.at(-1)!.origin + calls.at(-1)!.pathname).toBe(UPME_TERRITORIES + "/0/query");
+    expect(calls.at(-1)!.searchParams.get("returnGeometry")).toBe("false");
+  });
+  test("encuadra con límites publicados y advierte vigencia 2013 sin cambiar datos energéticos", async () => {
+    const fixture = geographicFixture(); const calls: URL[] = [];
+    const fetcher: typeof fixture.fetcher = async (input, init) => {
+      const url = new URL(input); calls.push(url);
+      if (url.hostname.includes("dane")) throw Error("fallo DANE sintético");
+      if (String(url).startsWith(UPME_TERRITORIES + "/0/query")) return Response.json({ features: [{ attributes: backupRows[0] }] });
+      if (String(url).startsWith(UPME_TERRITORIES + "/3/query")) return Response.json({ extent: { xmin: -76, ymin: 5, xmax: -74, ymax: 7, spatialReference: { wkid: 4326 } } });
+      return fixture.fetcher(input, init);
+    };
+    const context = await createGeographyService({ fetcher }).context({ q: "Proyectos solares en Medellín" });
+    expect(context.place?.municipalityCode).toBe("05001"); expect(context.warnings.join(" ")).toContain("2013");
+    expect(context.layer?.id).toBe("generation"); expect(context.bounds).toEqual([-76,5,-74,7]);
+    expect(calls.find(url => url.pathname.endsWith("/3/query"))?.searchParams.get("where")).toBe("DPTO_CCDGO='05' AND MPIO_CCDGO='001'");
+  });
+  test("no convierte un encuadre histórico inexistente en coordenadas supuestas", async () => {
+    const http = createGeoHttp(async () => Response.json({ extent: { xmin: "NaN", ymin: "NaN", xmax: "NaN", ymax: "NaN", spatialReference: { wkid: 4326 } } }));
+    await expect(placeBounds(http, { departmentCode: "05", department: "ANTIOQUIA", municipalityCode: "05001", municipality: "MEDELLÍN" }, undefined, "upme-2013")).rejects.toThrow("verificable");
   });
 });

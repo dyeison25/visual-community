@@ -59,6 +59,7 @@ export function createGeographyService(options: { fetcher?: Fetcher; now?: () =>
     if (!id) { context.status = "choice"; return { context, definition: null, style: null, technologyValues: [] as string[] }; }
     const definition = layers[id]; context.layer = publicLayer(id);
     const officialPlaces = await gazetteer(http, signal);
+    if (officialPlaces.reference === "upme-2013") context.warnings.push("DANE no está disponible desde el servidor. Se utiliza la referencia territorial oficial de respaldo UPME, con vigencia declarada 2013 (DANE/IGAC). Puede no incluir municipios o límites recientes. Los datos energéticos conservan la vigencia de su propia capa.");
     context.departments = officialPlaces.departments;
     const location = resolvePlace(input, officialPlaces); context.place = location.place; context.placeChoices = location.choices;
     const department = location.place?.departmentCode || input.department;
@@ -67,7 +68,7 @@ export function createGeographyService(options: { fetcher?: Fetcher; now?: () =>
       context.status = "place_choice"; context.message = location.choices.length ? "Hay varios territorios posibles en la consulta. Selecciona uno." : "No pudimos identificar un territorio oficial en la consulta. Selecciona departamento y municipio.";
       return { context, definition: null, style: null, technologyValues: [] as string[] };
     }
-    if (location.place) context.bounds = await placeBounds(http, location.place, signal);
+    if (location.place) context.bounds = await placeBounds(http, location.place, signal, officialPlaces.reference);
     const metadata = await http.json(UPME_REST + definition.path + "?f=json", signal, 1800000);
     const fields = new Set<string>((Array.isArray(metadata.fields) ? metadata.fields : []).map((f: { name: string }) => f.name));
     const expectedGeometry = { point: "esriGeometryPoint", line: "esriGeometryPolyline", polygon: "esriGeometryPolygon" }[definition.geometry];
@@ -97,7 +98,7 @@ export function createGeographyService(options: { fetcher?: Fetcher; now?: () =>
       }
     } else if (input.technology) throw new GeographyError(400, "Esta capa no admite filtro por tecnología.");
     context.territorialMode = location.place ? (definition.departmentField || definition.departmentCodeField ? "attributes" : "extent") : "none";
-    if (context.territorialMode === "extent") context.warnings.push("Consulta espacial por la extensión rectangular oficial DANE. Los elementos pueden cruzar límites municipales; no es un recorte administrativo exacto.");
+    if (context.territorialMode === "extent") context.warnings.push("Consulta espacial por la extensión rectangular de la referencia territorial oficial. Los elementos pueden cruzar límites municipales; no es un recorte administrativo exacto.");
     context.display = input.display || (definition.supportsWms && !location.place ? "wms" : "vector");
     if (context.display === "wms" && (!definition.supportsWms || location.place)) throw new GeographyError(400, "La vista WMS es panorámica nacional. Usa geometrías para consultar un territorio.");
     context.status = "ready";

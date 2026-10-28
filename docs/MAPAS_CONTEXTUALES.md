@@ -40,17 +40,20 @@ WMS solar/eólico utiliza `/server/services/{servicio}/MapServer/WMSServer`, ver
 
 Referencia administrativa: `https://geoportal.dane.gov.co/mparcgis/rest/services/MGN2025/Serv_CapasMGN_2025/MapServer`, municipios 317 y departamentos 319. Solo se lee una referencia ligera de nombres/códigos (1.122 filas en la comprobación) y extensiones seleccionadas; no se descargan todos los polígonos del país. La consulta exige código municipal no nulo, sin campos personales. No se envía al navegador el catálogo completo de municipios.
 
+**Respaldo territorial en Render:** la comprobación real encontró reinicios de conexión DANE (`ECONNRESET`), mientras UPME sí respondió. Si falla DANE, se consulta el catálogo oficial UPME `SITIOSUPME/UPME_BC_Sitios_UPME_Division_Politica/MapServer`: capa 0 (solo nombres/códigos, 1.123 filas observadas), 1 (encuadre departamental) y 3 (encuadre municipal). El servicio declara **vigencia 2013**, por lo que la interfaz advierte siempre su antigüedad y posibles municipios/límites recientes ausentes. No se presenta como división actual. Se concatenan únicamente los componentes DIVIPOLA oficiales de dos y tres dígitos; los códigos con nombres contradictorios se omiten. No se inventan encuadres si el servicio no los devuelve. El respaldo permanece en memoria 15 minutos y después se reintenta la fuente primaria. La antigüedad territorial no cambia los datos ni las fechas de las capas energéticas.
+
 **Precisión territorial:** se filtra por códigos oficiales o nombres de la propia capa cuando están disponibles. Las capas sin atributos administrativos, como potencial eólico y líneas, se consultan por intersección con la extensión rectangular oficial DANE. Esa extensión no es un límite administrativo ni un recorte exacto: la interfaz lo advierte. El área visible se intersecta además con la seleccionada; desplazar el mapa no elimina silenciosamente el filtro territorial.
 
 Las coordenadas vectoriales se solicitan en WGS84 (`outSR=4326`), se validan y nunca se completan con ubicaciones supuestas. Líneas y polígonos se simplifican por el servicio (`maxAllowableOffset=0.001` en grados) para visualización. Una postulación no implica operación. MW no equivale a MWh. Se muestran unidades, simbología oficial disponible y fechas por registro; los atlas son históricos. La tecnología se obtiene de valores distintos reales de cada capa; la consulta paginada debe ordenar por ese mismo campo para evitar el error ArcGIS 400. El control "Todas las tecnologías" anula explícitamente la inferencia.
 
 ## Backend y límites
 
-Las tres rutas requieren el middleware Firebase ya existente:
+Las rutas requieren el middleware Firebase ya existente:
 
 - `GET /api/geography/context`: intención, mapas posibles, lugares, filtros y leyenda.
 - `GET /api/geography/features`: GeoJSON saneado del área visible, máximo **250** registros. El aviso de muestra parcial invita a acercar el mapa; no pagina el país completo automáticamente.
 - `GET /api/geography/wms`: PNG autenticado, sin URLs, estilos, operaciones ni SQL arbitrarios del cliente.
+- `GET /api/geography/availability`: diagnóstico autenticado, sin parámetros, de dos metadatos cerrados UPME/DANE. No consulta perfiles ni ejecuta trabajos. Solo expone disponibilidad y códigos controlados, nunca credenciales, errores originales ni cuerpos de terceros.
 
 Presupuesto independiente: 45 solicitudes por usuario/minuto, sin consumir el contador compartido de búsqueda/chat. Como máximo tres peticiones oficiales simultáneas y doce en espera; plazo de 12 segundos para JSON y 20 para PNG (el WMS nacional puede tardar más). La desconexión del cliente cancela la lectura y libera el cupo. Límite de respuesta: 4 MB JSON / 1,2 MB PNG. La caché pública de proceso admite 64 entradas y 12 MB: datos 5 minutos, imágenes 1 minuto, metadatos/tecnologías/cobertura 30 minutos, referencia DANE 24 horas. Se descartan respuestas fallidas; no hay persistencia, exportación masiva ni escrituras Algolia/Firestore.
 
@@ -112,7 +115,7 @@ bun dist/verify-geography.js
 
 El build incluye ese bundle en la imagen existente, sin cambiar Dockerfile. No inicia el API, Firebase, Algolia ni recordatorios. Consulta dos registros por capa, metadatos, dos PNG y el encuadre oficial de Medellín. Emite exclusivamente capa, estado, conteos, bytes y códigos controlados; sale con error si falta una comprobación. No es un endpoint público ni una tarea automática. Ante un fallo de conectividad, mantener el mapa aislado y revisar egreso/servicio; no alterar las reglas Firebase ni activar envíos para diagnosticarlo.
 
-Si el plan no ofrece Shell, no es necesario contratar un servicio: después de autorizar la publicación del backend se pueden comprobar las mismas rutas autenticadas desde la plataforma. La disponibilidad de `/api/health` por sí sola no certifica acceso saliente a UPME. No se ha realizado esa verificación remota durante esta entrega.
+Si el plan no ofrece Shell, no es necesario contratar un servicio: se pueden comprobar las mismas rutas autenticadas desde la plataforma. La disponibilidad de `/api/health` por sí sola no certifica acceso saliente a UPME. La verificación remota durante esta publicación confirmó acceso a UPME y reinicios de conexión DANE; por eso se añadió el respaldo oficial explícitamente identificado como histórico.
 
 ## Validación y publicación
 
@@ -121,6 +124,8 @@ Resultado de la revisión local: TypeScript del código final correcto y **157 p
 La repetición final del build de producción pasó con el código actualizado: API, frontend, recordatorios y diagnóstico geográfico compilados. La revisión del bundle no detectó secretos. También pasaron nuevamente las 157 pruebas backend y la comprobación de renderizado del build en escritorio/móvil. El diagnóstico compilado verificó las siete capas, dos PNG WMS y el encuadre oficial de Medellín.
 
 Antes de publicar se repitieron las seis pruebas de interfaz con fixtures y las dos consultas visuales oficiales. La primera consulta WMS de escritorio encontró un timeout externo de 20 segundos; la aplicación mostró el error sin bloquear Algolia. La repetición de las dos pruebas oficiales pasó en escritorio y móvil sin cambios de código ni sustitución de datos oficiales.
+
+Después del diagnóstico de Render se añadieron pruebas de códigos de error seguros, redirecciones no seguidas, disponibilidad autenticada y respaldo territorial. Pasaron **164 pruebas backend**, TypeScript del proyecto completo y la verificación real de las siete capas usando el respaldo (dos registros por capa, sin geometrías territoriales masivas). Los diagnósticos no incluyen mensajes originales, destinos de redirección, tokens ni credenciales.
 
 No se añaden dependencias, API keys ni servicios de pago. El despliegue autorizado comprende Auto-Deploy de Render tras el push a `main` y únicamente Hosting mediante `bunx firebase-tools deploy --only hosting --project sistemagestionpermanencia --config firebase.json --non-interactive`. No se despliegan reglas, índices ni Functions; no se modifican workflows, variables de Render ni datos existentes. Las condiciones UPME siguen requiriendo aclaración antes de indexación o almacenamiento permanente masivo; esta versión consulta bajo demanda y solo mantiene caché temporal. La disponibilidad y actualización dependen de la fuente. La recepción de una imagen no garantiza que todos los datos sean actuales.
 
